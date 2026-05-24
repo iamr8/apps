@@ -16,6 +16,8 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
 
     /// <summary>
     /// Reads and parses the Info.plist for the given .app bundle path.
+    /// Handles both standard macOS bundles (<c>Contents/Info.plist</c>) and
+    /// iOS apps running on Apple Silicon (<c>Wrapper/*.app/Info.plist</c>).
     /// Returns null if the plist cannot be found or parsed.
     /// </summary>
     public async Task<PlistInfo?> ReadAsync(string appBundlePath, CancellationToken cancellationToken = default)
@@ -23,7 +25,11 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
         var plistPath = Path.Combine(appBundlePath, "Contents", "Info.plist");
         if (!File.Exists(plistPath))
         {
-            return null;
+            plistPath = FindWrappedPlist(appBundlePath);
+            if (plistPath is null)
+            {
+                return null;
+            }
         }
 
         try
@@ -41,6 +47,38 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
             logger.LogDebug(ex, "Failed to parse Info.plist at {Path}", plistPath);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Locates the Info.plist inside an iOS app wrapper structure used by Apple Silicon Macs.
+    /// iOS apps from the App Store are installed as <c>Foo.app/Wrapper/Bar.app/Info.plist</c>.
+    /// Returns <see langword="null"/> when no wrapper is found.
+    /// </summary>
+    private static string? FindWrappedPlist(string appBundlePath)
+    {
+        var wrapperDir = Path.Combine(appBundlePath, "Wrapper");
+        if (!Directory.Exists(wrapperDir))
+        {
+            return null;
+        }
+
+        try
+        {
+            foreach (var innerApp in Directory.EnumerateDirectories(wrapperDir, "*.app", SearchOption.TopDirectoryOnly))
+            {
+                var candidate = Path.Combine(innerApp, "Info.plist");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+        catch
+        {
+            // Permission or I/O error — fall through
+        }
+
+        return null;
     }
 
     private async Task<string?> ReadAsXmlAsync(string plistPath, CancellationToken cancellationToken)

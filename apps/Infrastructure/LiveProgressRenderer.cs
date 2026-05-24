@@ -344,6 +344,7 @@ public sealed class LiveProgressRenderer(
     /// <summary>
     /// Returns the pre-styled subtitle line for a row, or <see langword="null"/> for single-line rows.
     /// Errors are shown in red; description subtitles in dim gray; CVEs in red below description.
+    /// Update commands are shown in cyan below the description for outdated apps.
     /// </summary>
     private string? GetFormattedSubtitle(AppRecord app, int nameW)
     {
@@ -358,6 +359,15 @@ public sealed class LiveProgressRenderer(
         if (subtitle is not null)
         {
             lines.Add(AnsiStyle.Dim("  " + AnsiStyle.Truncate(subtitle.Trim(), nameW - 2)));
+        }
+
+        if (IsEffectivelyOutdated(app))
+        {
+            var cmd = GetUpdateCommand(app);
+            if (cmd is not null)
+            {
+                lines.Add(AnsiStyle.Cyan("  " + AnsiStyle.Truncate(cmd, nameW - 2)));
+            }
         }
 
         if (app.Vulnerabilities is { Count: > 0 })
@@ -637,4 +647,52 @@ public sealed class LiveProgressRenderer(
     }
 
     private static string KindGroupLabel(AppKind kind) => kind.ToGroupLabel();
+
+    /// <summary>
+    /// Returns the shell command to update an app, or <see langword="null"/> when no actionable
+    /// command applies (extensions, self-update apps, unresolved methods).
+    /// </summary>
+    private static string? GetUpdateCommand(AppRecord app)
+    {
+        if (app.Kind == AppKind.Extension)
+        {
+            return null;
+        }
+
+        var detail = app.UpdateMethodDetail;
+
+        return app.UpdateMethod switch
+        {
+            UpdateMethod.AppStore when detail is not null => $"mas upgrade {detail}",
+            UpdateMethod.HomebrewCask when detail is not null => $"brew upgrade --cask {detail}",
+            UpdateMethod.HomebrewFormula when detail is not null => $"brew upgrade {detail}",
+            UpdateMethod.MacPorts when detail is not null => $"sudo port upgrade {detail}",
+            UpdateMethod.Chocolatey when detail is not null => $"choco upgrade {detail}",
+            UpdateMethod.PackageRegistry => GetRegistryUpdateCommand(app),
+            UpdateMethod.Specialised when app.Scanner == "Docker" && detail is not null => $"docker pull {detail}",
+            UpdateMethod.Sdk when app.Scanner is "Dotnet" or "DotnetRuntime" => "brew upgrade dotnet-sdk",
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Returns the update command for package-registry-based apps, dispatched by scanner type.
+    /// </summary>
+    private static string? GetRegistryUpdateCommand(AppRecord app)
+    {
+        var detail = app.UpdateMethodDetail;
+        if (detail is null)
+        {
+            return null;
+        }
+
+        return app.Scanner switch
+        {
+            "NuGet" => $"dotnet tool update -g {detail}",
+            "NugetLocalTools" => $"dotnet tool update {detail}",
+            "npm" => $"npm update -g {detail}",
+            "GoTools" => $"go install {detail}@latest",
+            _ => null
+        };
+    }
 }

@@ -164,12 +164,13 @@ public sealed class ApplicationsScanner(PlistReader plistReader, ILogger<Applica
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> when the bundle contains a Mac App Store receipt,
-    /// which macOS always places at <c>Contents/_MASReceipt/</c> for App-Store-distributed apps.
-    /// This works even when <c>mas</c> is absent or uses a different display name.
+    /// Returns <see langword="true"/> when the bundle is an App Store install.
+    /// Detected by either the <c>Contents/_MASReceipt/</c> directory (native macOS apps)
+    /// or the <c>Wrapper/</c> directory (iOS/iPadOS apps running on Apple Silicon).
     /// </summary>
     private static bool IsMasInstalled(string bundlePath)
     {
-        return Directory.Exists(Path.Combine(bundlePath, "Contents", "_MASReceipt"));
+        return Directory.Exists(Path.Combine(bundlePath, "Contents", "_MASReceipt"))
+            || Directory.Exists(Path.Combine(bundlePath, "Wrapper"));
     }
 }
