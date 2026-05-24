@@ -89,10 +89,14 @@ apps --unpin <name>     # remove a pin from a package
 
 ## Architecture
 
-The tool uses a two-stage concurrent pipeline:
+The tool uses a four-stage concurrent pipeline:
 
-1. **Discovery** -- all scanners run in parallel, streaming results through a bounded channel.
-2. **Check** -- apps are grouped by update method; all groups run concurrently, results stream to a live renderer.
+1. **Discovery** — all scanners run in parallel, streaming results through a bounded channel.
+2. **Method Resolution** — apps without a suggested update method are matched against Homebrew casks/formulas and Chocolatey package catalogs. Includes catalog lookups and fuzzy search for unresolved GUI apps.
+3. **Update Check** — apps are grouped by update method; all groups run concurrently, results stream to a live renderer.
+4. **Security Audit** — all auditable packages are batch-queried against OSV.dev for known CVEs, then enriched with patched-version info from the GitHub Advisory Database.
+
+Each phase shows a live progress bar with a real-time seconds counter.
 
 Each component lives in its own vertical slice under `Components/`:
 
@@ -122,7 +126,7 @@ apps/
 | Component   | What it covers                                                                                         | Scanner                         | Checker                        |
 |-------------|--------------------------------------------------------------------------------------------------------|---------------------------------|--------------------------------|
 | AppStore    | macOS App Store apps (via `mas` CLI)                                                                   | `AppStoreScanner`               | `AppStoreChecker`              |
-| Audit       | CVE vulnerability scanning via OSV.dev                                                                 | --                              | `OsvAuditChecker`              |
+| Audit       | CVE vulnerability scanning via OSV.dev + GitHub Advisory Database                              | --                              | `OsvAuditChecker`, `GitHubAdvisoryEnricher` |
 | Chocolatey  | Chocolatey packages (Windows cross-check)                                                              | `ChocoScanner`                  | `ChocoChecker`                 |
 | Docker      | Docker images (local digest vs Hub)                                                                    | `DockerImageScanner`            | `DockerHubChecker`             |
 | Dotnet      | .NET SDKs, runtimes, NuGet global/local tools, project packages                                        | `DotnetScanner`, `NugetGlobalToolsScanner`, `NugetLocalToolsScanner`, `NugetProjectScanner`, `DotnetRuntimeScanner` | `DotnetReleasesChecker`, `NugetRegistryChecker` |

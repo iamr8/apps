@@ -102,11 +102,15 @@ apps/
 - **Graceful shutdown** — `Console.CancelKeyPress` (Ctrl+C) and `PosixSignalRegistration` (SIGTERM) cancel the
   root `CancellationTokenSource`. The token propagates through all scanners, checkers, HTTP calls, and subprocesses
   so in-flight work stops cooperatively. Exit code 130 on SIGINT.
-- **Two-stage concurrent pipeline:**
+- **Four-stage concurrent pipeline:**
     - Stage 1 (Discovery): all scanners run in parallel, results flow through a bounded `Channel<DiscoveredApp>` (
       capacity 512, `FullMode = Wait`).
-    - Stage 2 (Check): apps are grouped by `UpdateMethod`; all groups run concurrently, results stream through a
+    - Stage 2 (Method Resolution): apps without a suggested update method are matched against Homebrew casks/formulas,
+      Chocolatey packages, and Homebrew catalog. Includes fuzzy search for unresolved GUI apps.
+    - Stage 3 (Update Check): apps are grouped by `UpdateMethod`; all groups run concurrently, results stream through a
       `Channel<UpdateCheckResult>` to the live renderer.
+    - Stage 4 (Security Audit): auditable packages are batch-queried against OSV.dev for known CVEs, then GHSA-prefixed
+      results are enriched with patched-version info from the GitHub Advisory Database REST API (public, no auth).
 - **Subprocess concurrency** — a `SemaphoreSlim(6)` in `ProcessRunner` caps the number of concurrent child processes.
 - **Per-host HTTP rate limiting** — `RateLimitedHttpHandler` uses `SemaphoreSlim` per host and a
   `TokenBucketRateLimiter`

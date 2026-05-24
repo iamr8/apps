@@ -324,6 +324,27 @@ Handles `UpdateMethod.Electron`; reads `app.UpdateMethodDetail` to determine the
 |-----------------------|------------------------------------------|---------|
 | `DotnetUpdateChecker` | `dotnet sdk check` — parses stdout table | devtool |
 
+### 3.9 Security Audit (Stage 4)
+
+The audit phase runs after all update checks complete. It identifies known CVEs in installed packages.
+
+#### 3.9.1 OSV.dev Batch Audit (`OsvAuditChecker`)
+
+- **API:** `POST https://api.osv.dev/v1/querybatch`
+- **Auth:** none required.
+- **Rate limits:** no published limits; designed for batch queries.
+- **Batch size:** up to 100 packages per request.
+- **Supported ecosystems:** NuGet, npm, Go, SwiftURL.
+- **Strategy:** maps each auditable package to its ecosystem, batches them, and receives vulnerability data including GHSA IDs, CVSS scores, and severity levels.
+
+#### 3.9.2 GitHub Advisory Enrichment (`GitHubAdvisoryEnricher`)
+
+- **API:** `GET https://api.github.com/advisories/{GHSA-id}`
+- **Auth:** none required (public endpoint).
+- **Rate limits:** 60 requests/hour unauthenticated; capped at 30 lookups per run to leave headroom.
+- **Strategy:** after OSV returns GHSA-prefixed vulnerability IDs, fetches each advisory individually to obtain the `first_patched_version` field — tells users exactly what version resolves the vulnerability.
+- **Output:** enriches `VulnerabilityInfo` with `PatchedVersion`; displayed as `(fix: X.Y.Z)` in the output table.
+
 ---
 
 ## 4. Architecture
@@ -333,9 +354,10 @@ Program.cs  (DI root, System.CommandLine setup)
 
 Commands/
   UpdateCommand ──► UpdateOrchestrator
-                      ScanOrchestrator → MethodResolverOrchestrator → CheckOrchestrator → LiveProgressRenderer.RenderTable
+                      ScanOrchestrator → MethodResolverOrchestrator → CheckOrchestrator → OsvAuditChecker → GitHubAdvisoryEnricher → LiveProgressRenderer.RenderTable
 
 Components/            vertical slices — one folder per component (scanner + checker + JSON + registration)
+  Audit/        OsvAuditChecker, GitHubAdvisoryEnricher
   Dotnet/       DotnetScanner, DotnetReleasesChecker, NugetGlobalToolsScanner,
                 NugetLocalToolsScanner, NugetProjectScanner, NugetRegistryChecker
   Node/         NodeScanner, NpmGlobalScanner, NpmProjectScanner, NpmRegistryChecker
@@ -360,8 +382,9 @@ Checkers/         shared contract  (IUpdateChecker)
 
 Orchestration/
   ScanOrchestrator          -- stage 1: runs all scanners concurrently
-  MethodResolverOrchestrator -- stage 1.5: resolves NULL methods via Homebrew → Choco fallback
-  CheckOrchestrator         -- stage 2: runs all checkers concurrently
+  MethodResolverOrchestrator -- stage 2: resolves NULL methods via Homebrew → Choco fallback
+  CheckOrchestrator         -- stage 3: runs all checkers concurrently
+  (OsvAuditChecker)         -- stage 4: CVE audit via OSV.dev + GitHub Advisory enrichment
 
 
 Models/
@@ -625,7 +648,9 @@ Typical developer Mac, ~200 tracked items, GitHub token configured:
 | JetBrains (token-bucket 4/s)          | N/4 s        | deliberately throttled             |
 | Docker (4x concurrent)                | 1-2 s        | image count                        |
 | macOS Software Update (background)    | 5-15 s       | Apple CDN                          |
-| **Total wall-clock (fully parallel)** | **~10-20 s** | `brew list` scan + GitHub dominate |
+| Security audit (OSV.dev batch)        | 0.5-1 s      | 1-3 batch POST requests            |
+| GitHub Advisory enrichment            | 0.5-2 s      | N advisories (capped at 30)        |
+| **Total wall-clock (fully parallel)** | **~12-25 s** | `brew list` scan + method resolver dominate |
 
 > `MacOsUpdateChecker` runs concurrently with all HTTP checkers; its 15 s worst case is
 > completely hidden behind the rest of the pipeline.
