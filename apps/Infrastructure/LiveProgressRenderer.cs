@@ -254,6 +254,19 @@ public sealed class LiveProgressRenderer(
         }
     }
 
+    /// <summary>Clears the resolver-progress line and prints a completed progress bar with summary.</summary>
+    public void RenderResolverComplete(int totalSteps, int resolvedCount)
+    {
+        lock (_lock)
+        {
+            ClearStatusLine();
+            var bar = AnsiStyle.ProgressBar(totalSteps, totalSteps);
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Resolved update methods for {AnsiStyle.Bold(resolvedCount.ToString())} apps {elapsed}");
+            _currentStatusLine = "";
+        }
+    }
+
     /// <summary>Clears the phase indicator and prints a styled completion message with elapsed time.</summary>
     public void RenderPhaseEnd(string message)
     {
