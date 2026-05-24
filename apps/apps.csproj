@@ -20,9 +20,9 @@
         <PackageLicenseFile>../LICENSE</PackageLicenseFile>
         <PackageProjectUrl>https://github.com/iamr8/apps</PackageProjectUrl>
 
-        <Version>1.0.0</Version>
-        <AssemblyVersion>1.0.0.0</AssemblyVersion>
-        <FileVersion>1.0.0.0</FileVersion>
+        <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../VERSION').Trim())</Version>
+        <AssemblyVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../VERSION').Trim()).0</AssemblyVersion>
+        <FileVersion>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../VERSION').Trim()).0</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
