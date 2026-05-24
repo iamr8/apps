@@ -1,0 +1,45 @@
+name: SBOM Generation
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+permissions:
+  contents: write
+
+jobs:
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          dotnet tool install --global CycloneDX
+          dotnet CycloneDX apps/apps.csproj -o sbom -f sbom.json --json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/sbom.json
+
+      - name: Attach SBOM to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: sbom/sbom.json
+

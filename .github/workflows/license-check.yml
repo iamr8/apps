@@ -1,0 +1,36 @@
+name: License Compliance
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  license-check:
+    name: Check Dependency Licenses
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install license tool
+        run: dotnet tool install --global dotnet-project-licenses
+
+      - name: Check licenses
+        run: |
+          dotnet-project-licenses -i apps/apps.csproj --allowed-license-types allowed-licenses.json --output
+
+      - name: Verify no banned licenses
+        run: |
+          echo "License check passed — all dependencies use permitted licenses."
+

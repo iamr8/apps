@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release /warnaserror
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+  aot-publish:
+    name: AOT Publish Smoke Test
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish AOT binary
+        run: dotnet publish apps/apps.csproj -c Release -r osx-arm64 --self-contained
+
+      - name: Verify binary runs
+        run: ./apps/bin/Release/net10.0/osx-arm64/publish/apps --help
+
