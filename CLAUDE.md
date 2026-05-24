@@ -332,8 +332,11 @@ VERSION          ← contains e.g. "1.2.0" (no "v" prefix, no trailing newline b
 
 1. Edit the `VERSION` file with the new version number.
 2. Commit: `git commit -am "chore: bump version to X.Y.Z"`
-3. Tag: `git tag vX.Y.Z`
-4. Push: `git push origin main --tags`
+3. Push: `git push origin main`
+
+The CI pipeline (`.github/workflows/tag.yml`) detects the VERSION change, creates and pushes
+`vX.Y.Z` tag automatically, which then triggers the release workflow
+(`.github/workflows/release.yml`) to build AOT binaries and publish a GitHub Release.
 
 ### Tagging Rules
 
