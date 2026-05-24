@@ -35,6 +35,10 @@ BINARY="$OUTPUT_DIR/apps"
 chmod +x "$BINARY"
 SIZE=$(du -h "$BINARY" | cut -f1 | xargs)
 
+INSTALL_PATH="/usr/local/bin/apps"
+cp "$BINARY" "$INSTALL_PATH"
+
 echo ""
 echo "Published: $BINARY ($SIZE)"
+echo "Copied to: $INSTALL_PATH"
 
