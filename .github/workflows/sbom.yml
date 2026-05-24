@@ -29,7 +29,7 @@ jobs:
       - name: Generate SBOM (CycloneDX)
         run: |
           dotnet tool install --global CycloneDX
-          dotnet CycloneDX apps/apps.csproj -o sbom -f sbom.json --json
+          dotnet CycloneDX apps/apps.csproj -o sbom --json --filename sbom.json
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
