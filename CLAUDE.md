@@ -314,6 +314,8 @@ chore(deps): bump Serilog from 4.3.0 to 4.3.1
 - No period at the end.
 - Keep the subject under 72 characters.
 - Use imperative mood ("add", "fix", "update" — not "added", "fixes", "updated").
+- Every file change in a single commit must be directly related to the same logical change.
+  Never bundle unrelated modifications into one commit.
 
 ## Versioning, Tagging & Releasing
 
