@@ -10,11 +10,14 @@ namespace apps.Components.MacOs;
 
 /// <summary>
 /// Discovers the installed Xcode version via <c>xcodebuild -version</c>.
-/// Emits one <see cref="AppKind.DevTool"/> entry for Xcode itself.
+/// Emits one <see cref="AppKind.Packages"/> entry for Xcode itself.
+/// Xcode is always updated through the App Store.
 /// </summary>
 public sealed class XcodeScanner(IProcessRunner runner, ILogger<XcodeScanner> logger)
     : IScanner
 {
+    private const string XcodeBundleId = "com.apple.dt.Xcode";
+
     public string Name => "Xcode";
 
     /// <inheritdoc/>
@@ -35,9 +38,6 @@ public sealed class XcodeScanner(IProcessRunner runner, ILogger<XcodeScanner> lo
             yield break;
         }
 
-        // Output:
-        //   Xcode 16.3
-        //   Build version 16E140
         var lines = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var version = ParseXcodeVersion(lines);
         if (version is null)
@@ -45,7 +45,6 @@ public sealed class XcodeScanner(IProcessRunner runner, ILogger<XcodeScanner> lo
             yield break;
         }
 
-        // Xcode installs to /Applications/Xcode.app (or Xcode-beta.app)
         var xcodePath = File.Exists("/Applications/Xcode.app")
             ? "/Applications/Xcode.app"
             : null;
@@ -56,9 +55,8 @@ public sealed class XcodeScanner(IProcessRunner runner, ILogger<XcodeScanner> lo
             AppKind.Packages,
             version,
             xcodePath,
-            // Xcode updates come through the App Store; do NOT pre-set the method here
-            // so the priority chain can assign AppStore if the bundle ID matches.
-            SuggestedMethod: null);
+            SuggestedMethod: UpdateMethod.AppStore,
+            BundleId: XcodeBundleId);
     }
 
 
