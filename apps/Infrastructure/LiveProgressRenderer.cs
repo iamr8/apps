@@ -575,10 +575,11 @@ public sealed class LiveProgressRenderer(
             foreach (var vuln in app.Vulnerabilities)
             {
                 var severity = FormatSeverity(vuln.Severity);
+                var patchHint = vuln.PatchedVersion is not null ? $" (fix: {vuln.PatchedVersion})" : "";
                 var summary = vuln.Summary is not null
-                    ? " — " + AnsiStyle.Truncate(vuln.Summary.Trim(), nameW - vuln.Id.Length - severity.Length - 8)
+                    ? " — " + AnsiStyle.Truncate(vuln.Summary.Trim(), nameW - vuln.Id.Length - severity.Length - patchHint.Length - 8)
                     : "";
-                lines.Add(AnsiStyle.Red($"  {severity} {vuln.Id}{summary}"));
+                lines.Add(AnsiStyle.Red($"  {severity} {vuln.Id}{patchHint}{summary}"));
             }
         }
 

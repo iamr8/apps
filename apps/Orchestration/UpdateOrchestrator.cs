@@ -15,6 +15,7 @@ public sealed class UpdateOrchestrator(
     MethodResolverOrchestrator resolver,
     CheckOrchestrator checker,
     OsvAuditChecker auditor,
+    GitHubAdvisoryEnricher enricher,
     PinManager pinManager,
     LiveProgressRenderer renderer,
     ILogger<UpdateOrchestrator> logger)
@@ -97,6 +98,12 @@ public sealed class UpdateOrchestrator(
         try { await auditTimerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
 
         renderer.RenderAuditComplete(auditBatchTotal, auditResults.Count);
+
+        // Enrich vulnerabilities with patched version info from GitHub Advisory Database
+        if (auditResults.Count > 0)
+        {
+            await enricher.EnrichAsync(auditResults, null, cancellationToken).ConfigureAwait(false);
+        }
 
         foreach (var result in auditResults)
         {

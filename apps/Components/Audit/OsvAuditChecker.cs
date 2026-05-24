@@ -131,10 +131,11 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, ILogge
     {
         return app.Scanner switch
         {
-            "Dotnet" or "NuGet Global Tools" or "NuGet Local Tools" => "NuGet",
-            "npm Global" or "Node" => "npm",
-            "Go" or "Go Tools" => "Go",
-            "Homebrew" => "OSS-Fuzz",
+            "Dotnet" or "NuGet" or "NugetLocalTools" or "NugetProject" => "NuGet",
+            "npm" or "NpmProject" or "Node" => "npm",
+            "Go" or "GoTools" or "GoMod" => "Go",
+            "SwiftPM" => "SwiftURL",
+            "Homebrew" => null,
             _ => null
         };
     }
@@ -213,10 +214,21 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, ILogge
 }
 
 /// <summary>Result of a CVE audit for a single package.</summary>
-public sealed record AuditResult(AppRecord App, IReadOnlyList<VulnerabilityInfo> Vulnerabilities);
+public sealed class AuditResult(AppRecord App, VulnerabilityInfo[] Vulnerabilities)
+{
+    /// <summary>The app that has vulnerabilities.</summary>
+    public AppRecord App { get; } = App;
+
+    /// <summary>Known vulnerabilities — mutable so enrichment can add patched version info.</summary>
+    public VulnerabilityInfo[] Vulnerabilities { get; } = Vulnerabilities;
+}
 
 /// <summary>A single vulnerability found for a package.</summary>
-public sealed record VulnerabilityInfo(string Id, string? Summary, VulnerabilitySeverity Severity);
+public sealed record VulnerabilityInfo(
+    string Id,
+    string? Summary,
+    VulnerabilitySeverity Severity,
+    string? PatchedVersion = null);
 
 /// <summary>Severity level of a vulnerability.</summary>
 public enum VulnerabilitySeverity
