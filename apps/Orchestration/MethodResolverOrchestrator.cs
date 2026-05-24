@@ -136,6 +136,8 @@ public sealed class MethodResolverOrchestrator(
     /// Matches <paramref name="candidates"/> against the Homebrew catalog entries and
     /// populates <paramref name="resolved"/> with catalog-based <see cref="UpdateMethod.HomebrewCask"/>
     /// entries for each matched app.
+    /// Only accepts a match when the catalog version is plausibly related to the installed version
+    /// (prevents false positives from same-name but entirely different products).
     /// </summary>
     private void ApplyCatalogMatches(
         DiscoveredApp[] candidates,
@@ -148,6 +150,16 @@ public sealed class MethodResolverOrchestrator(
 
             if (!catalog.TryGetValue(normalized, out var catalogEntry))
             {
+                continue;
+            }
+
+            if (app.InstalledVersion is not null && !VersionMatchesInstalled(app.InstalledVersion, catalogEntry.Version))
+            {
+                logger.LogDebug(
+                    "Catalog match rejected for {App}: installed {Installed} vs catalog {Catalog} (version mismatch — likely different product)",
+                    app.Name,
+                    app.InstalledVersion,
+                    catalogEntry.Version);
                 continue;
             }
 

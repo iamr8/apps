@@ -172,10 +172,14 @@ public sealed partial class AppStoreChecker(
                 .GetFromJsonAsync(query, AppStoreJsonContext.Default.ItunesLookupResponse, cancellationToken)
                 .ConfigureAwait(false);
 
-            var result = response?.Results?.FirstOrDefault();
+            var result = response?.Results?.FirstOrDefault(r =>
+                string.Equals(r.Kind, "mac-software", StringComparison.OrdinalIgnoreCase));
 
             if (result?.Version is not { Length: > 0 } latestVersion)
             {
+                logger.LogDebug(
+                    "iTunes lookup for {App}: no mac-software result found (response may contain iOS-only records)",
+                    app.Name);
                 return new UpdateCheckResult(app.Name, UpdateMethod.AppStore, false, app.InstalledVersion, app.InstalledVersion);
             }
 
@@ -288,6 +292,14 @@ internal sealed class ItunesResult
 
     [JsonPropertyName("bundleId")]
     public string? BundleId { get; init; }
+
+    /// <summary>
+    /// Platform discriminator: <c>"mac-software"</c> for native macOS apps,
+    /// <c>"software"</c> for iOS apps. Universal apps that share a bundle ID
+    /// often return the iOS record whose version may differ from the macOS build.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public string? Kind { get; init; }
 }
 
 [JsonSerializable(typeof(ItunesLookupResponse))]
