@@ -446,6 +446,64 @@ public sealed class LiveProgressRenderer(
         }
     }
 
+    /// <summary>
+    /// Renders a colorized summary report after the results table showing key pipeline statistics.
+    /// </summary>
+    public void RenderSummary(
+        int discovered,
+        int checked_,
+        int updatesAvailable,
+        int pinned,
+        int vulnerabilities,
+        int errors,
+        TimeSpan elapsed)
+    {
+        Console.WriteLine();
+
+        var parts = new List<string>
+        {
+            AnsiStyle.Bold(discovered.ToString()) + " discovered",
+            AnsiStyle.Bold(checked_.ToString()) + " checked"
+        };
+
+        if (updatesAvailable > 0)
+        {
+            parts.Add(AnsiStyle.Yellow(AnsiStyle.Bold(updatesAvailable.ToString()) + " update" + (updatesAvailable == 1 ? "" : "s") + " available"));
+        }
+        else
+        {
+            parts.Add(AnsiStyle.Green("all up to date"));
+        }
+
+        if (pinned > 0)
+        {
+            parts.Add(AnsiStyle.Cyan(AnsiStyle.Bold(pinned.ToString()) + " pinned"));
+        }
+
+        if (vulnerabilities > 0)
+        {
+            parts.Add(AnsiStyle.Red(AnsiStyle.Bold(vulnerabilities.ToString()) + " vulnerable"));
+        }
+        else
+        {
+            parts.Add(AnsiStyle.Green("no vulnerabilities"));
+        }
+
+        if (errors > 0)
+        {
+            parts.Add(AnsiStyle.Red(AnsiStyle.Bold(errors.ToString()) + " error" + (errors == 1 ? "" : "s")));
+        }
+
+        var timeStr = elapsed.TotalSeconds < 60
+            ? $"{elapsed.TotalSeconds:F1}s"
+            : $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds:D2}s";
+
+        parts.Add(AnsiStyle.DarkGray(timeStr));
+
+        Console.WriteLine(string.Join(AnsiStyle.DarkGray(" · "), parts));
+        Console.WriteLine();
+    }
+
     private void PrintTableFmt(IReadOnlyList<AppRecord> apps)
     {
         if (apps.Count == 0)

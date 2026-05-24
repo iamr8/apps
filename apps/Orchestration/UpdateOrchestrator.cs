@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using apps.Components.Audit;
 using apps.Infrastructure;
 using apps.Models;
@@ -45,6 +47,8 @@ public sealed class UpdateOrchestrator(
         logger.LogInformation("Starting update pipeline (kind={Kind}, dryRun={DryRun})",
             options.ScopeKind,
             options.DryRun);
+
+        var pipelineStopwatch = Stopwatch.StartNew();
 
         var discovered = await scanner.RunAsync(cancellationToken).ConfigureAwait(false);
 
@@ -123,6 +127,20 @@ public sealed class UpdateOrchestrator(
             .ToArray();
 
         renderer.RenderTable(visible);
+
+        var totalUpdates = resolved.Count(a => a.Kind != AppKind.SystemApp && a.UpdateAvailable);
+        var totalPinned = resolved.Count(a => a.IsPinned);
+        var totalVulnerable = resolved.Count(a => a.Vulnerabilities is { Count: > 0 });
+
+        renderer.RenderSummary(
+            discovered: resolved.Count(a => a.Kind != AppKind.SystemApp),
+            checked_: resolved.Count(a => a.Kind != AppKind.SystemApp && a.UpdateMethod is not null and not UpdateMethod.None),
+            updatesAvailable: totalUpdates,
+            pinned: totalPinned,
+            vulnerabilities: totalVulnerable,
+            errors: errors,
+            elapsed: pipelineStopwatch.Elapsed);
+
         return errors > 0 ? 1 : 0;
     }
 
