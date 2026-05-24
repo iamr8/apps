@@ -51,6 +51,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine previous tag
+        id: prev
+        run: |
+          PREV=$(git tag --sort=-v:refname | grep -E '^v' | sed -n '2p')
+          echo "tag=${PREV:-$(git rev-list --max-parents=0 HEAD)}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release body
+        id: body
+        run: |
+          CURRENT="${GITHUB_REF_NAME}"
+          PREV="${{ steps.prev.outputs.tag }}"
+          REPO="${{ github.server_url }}/${{ github.repository }}"
+          COMPARE="${REPO}/compare/${PREV}...${CURRENT}"
+
+          {
+            echo "body<<EOF"
+            echo "## What's Changed"
+            echo ""
+            echo "**Full diff:** [${PREV}...${CURRENT}](${COMPARE})"
+            echo ""
+            git log "${PREV}..${CURRENT}" --pretty=format:"- %s ([%h](${REPO}/commit/%H))" --reverse | grep -v "^- chore: bump version"
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -60,5 +89,5 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          body: ${{ steps.body.outputs.body }}
           files: artifacts/*.tar.gz
