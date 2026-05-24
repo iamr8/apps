@@ -72,6 +72,18 @@ internal sealed class VsCodeExtVersion
 {
     [JsonPropertyName("version")]
     public string? Version { get; init; }
+
+    [JsonPropertyName("properties")]
+    public VsCodeExtProperty[]? Properties { get; init; }
+}
+
+internal sealed class VsCodeExtProperty
+{
+    [JsonPropertyName("key")]
+    public string? Key { get; init; }
+
+    [JsonPropertyName("value")]
+    public string? Value { get; init; }
 }
 
 [JsonSerializable(typeof(VsCodePackageJson))]

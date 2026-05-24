@@ -26,9 +26,11 @@ public sealed class VsCodeExtChecker(IHttpClientFactory httpClientFactory, ILogg
 {
     private const string GalleryApiPath = "/_apis/public/gallery/extensionquery?api-version=7.2-preview.1";
     private const int BatchSize = 100;
-    // FilterType 7 = ExtensionName; Flag 512 = IncludeLatestVersionOnly
+    // FilterType 7 = ExtensionName
     private const int FilterTypeExtensionName = 7;
-    private const int FlagIncludeLatestVersionOnly = 512;
+    // Flags: IncludeVersions (1) | IncludeVersionProperties (16) to detect pre-release
+    private const int QueryFlags = 1 | 16;
+    private const string PreReleasePropertyKey = "Microsoft.VisualStudio.Code.PreRelease";
 
     /// <inheritdoc/>
     public UpdateMethod Method => UpdateMethod.Specialised;
@@ -110,7 +112,7 @@ public sealed class VsCodeExtChecker(IHttpClientFactory httpClientFactory, ILogg
                     PageNumber = 1
                 }
             ],
-            Flags = FlagIncludeLatestVersionOnly
+            Flags = QueryFlags
         };
 
         try
@@ -145,7 +147,7 @@ public sealed class VsCodeExtChecker(IHttpClientFactory httpClientFactory, ILogg
                 {
                     var publisherName = ext.Publisher?.PublisherName;
                     var extensionName = ext.ExtensionName;
-                    var version = ext.Versions?.FirstOrDefault()?.Version;
+                    var version = GetLatestStableVersion(ext.Versions);
 
                     if (string.IsNullOrWhiteSpace(publisherName)
                         || string.IsNullOrWhiteSpace(extensionName)
@@ -179,6 +181,46 @@ public sealed class VsCodeExtChecker(IHttpClientFactory httpClientFactory, ILogg
 
         var updateAvailable = VersionComparer.IsNewer(app.InstalledVersion, latest);
         return new UpdateCheckResult(app.Name, UpdateMethod.Specialised, updateAvailable, app.InstalledVersion, latest);
+    }
+
+    private static string? GetLatestStableVersion(VsCodeExtVersion[]? versions)
+    {
+        if (versions is null)
+        {
+            return null;
+        }
+
+        foreach (var v in versions)
+        {
+            if (IsPreRelease(v))
+            {
+                continue;
+            }
+
+            return v.Version;
+        }
+
+        // All versions are pre-release — fall back to the first one
+        return versions.FirstOrDefault()?.Version;
+    }
+
+    private static bool IsPreRelease(VsCodeExtVersion version)
+    {
+        if (version.Properties is null)
+        {
+            return false;
+        }
+
+        foreach (var prop in version.Properties)
+        {
+            if (string.Equals(prop.Key, PreReleasePropertyKey, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(prop.Value, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
