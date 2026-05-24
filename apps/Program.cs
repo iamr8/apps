@@ -66,7 +66,7 @@ internal static class Program
         var rootCmd = new RootCommand("apps — discover and check for updates on macOS");
 
         var orch = serviceProvider.GetRequiredService<UpdateOrchestrator>();
-        UpdateCommand.Configure(rootCmd, orch);
+        UpdateCommand.Configure(rootCmd, orch, serviceProvider);
 
         int exitCode;
         try

@@ -1,9 +1,10 @@
 using System.CommandLine;
-using System.Diagnostics;
 
 using apps.Infrastructure;
 using apps.Models;
 using apps.Orchestration;
+
+using Microsoft.Extensions.DependencyInjection;
 
 namespace apps.Commands;
 
@@ -17,7 +18,7 @@ public static class UpdateCommand
     private const string InstallPath = "/usr/local/bin/apps";
 
     /// <summary>Configures the root command with update options and action.</summary>
-    public static void Configure(RootCommand rootCmd, UpdateOrchestrator orchestrator)
+    public static void Configure(RootCommand rootCmd, UpdateOrchestrator orchestrator, IServiceProvider serviceProvider)
     {
         var allOpt = new Option<bool>("--all", new[] { "-a" })
         {
@@ -50,15 +51,29 @@ public static class UpdateCommand
             Description = "Install apps to /usr/local/bin so it can be run from anywhere"
         };
 
+        var upgradeOpt = new Option<bool>("--upgrade")
+        {
+            Description = "Check if a newer version of apps is available"
+        };
+
         rootCmd.Options.Add(allOpt);
         rootCmd.Options.Add(kindOpt);
         rootCmd.Options.Add(dryRunOpt);
         rootCmd.Options.Add(pinOpt);
         rootCmd.Options.Add(unpinOpt);
         rootCmd.Options.Add(installOpt);
+        rootCmd.Options.Add(upgradeOpt);
 
         rootCmd.SetAction(async (pr, cancellationToken) =>
         {
+            if (pr.GetValue(upgradeOpt))
+            {
+                Console.WriteLine($"apps v{SelfUpdateChecker.CurrentVersion}");
+                var httpFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
+                await SelfUpdateChecker.CheckForUpdateAsync(httpFactory, cancellationToken);
+                return 0;
+            }
+
             if (pr.GetValue(installOpt))
             {
                 return HandleInstall();
@@ -112,7 +127,12 @@ public static class UpdateCommand
                 UnpinPackage = unpinValue
             };
 
-            return await orchestrator.RunFullPipelineAsync(options, cancellationToken);
+            var result = await orchestrator.RunFullPipelineAsync(options, cancellationToken);
+
+            var httpClientFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
+            await SelfUpdateChecker.CheckForUpdateAsync(httpClientFactory, cancellationToken);
+
+            return result;
         });
     }
 
