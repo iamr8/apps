@@ -55,39 +55,42 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch all tags
+        run: git fetch --tags --force
+
       - name: Determine previous tag
         id: prev
         run: |
-          PREV=$(git tag --sort=-v:refname | grep -E '^v' | sed -n '2p')
-          echo "tag=${PREV:-$(git rev-list --max-parents=0 HEAD)}" >> "$GITHUB_OUTPUT"
+          PREV=$(git tag --sort=-v:refname | grep -E '^v' | grep -v "^${GITHUB_REF_NAME}$" | head -1)
+          if [ -z "$PREV" ]; then
+            PREV=$(git rev-list --max-parents=0 HEAD | head -1)
+          fi
+          echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release body
-        id: body
         run: |
           CURRENT="${GITHUB_REF_NAME}"
           PREV="${{ steps.prev.outputs.tag }}"
           REPO="${{ github.server_url }}/${{ github.repository }}"
           COMPARE="${REPO}/compare/${PREV}...${CURRENT}"
 
-          {
-            echo "body<<EOF"
-            echo "## What's Changed"
-            echo ""
-            echo "**Full diff:** [${PREV}...${CURRENT}](${COMPARE})"
-            echo ""
-            git log "${PREV}..${CURRENT}" --pretty=format:"- %s ([%h](${REPO}/commit/%H))" --reverse | grep -v "^- chore: bump version"
-            echo ""
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          echo "## What's Changed" > release-notes.md
+          echo "" >> release-notes.md
+          echo "**Full diff:** [${PREV}...${CURRENT}](${COMPARE})" >> release-notes.md
+          echo "" >> release-notes.md
+          git log "${PREV}..${CURRENT}" --pretty=format:"- %s ([%h](${REPO}/commit/%H))" --reverse | grep -v "chore: bump version" >> release-notes.md || true
+          echo "" >> release-notes.md
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          body: ${{ steps.body.outputs.body }}
-          files: artifacts/*.tar.gz
+          body_path: release-notes.md
+          files: artifacts/**/*.tar.gz
