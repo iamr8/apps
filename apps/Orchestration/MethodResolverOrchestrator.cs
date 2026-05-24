@@ -21,6 +21,7 @@ namespace apps.Orchestration;
 /// </summary>
 public sealed class MethodResolverOrchestrator(
     IProcessRunner runner,
+    LiveProgressRenderer renderer,
     ILogger<MethodResolverOrchestrator> logger)
 {
     private static readonly string[] BrewCandidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
@@ -41,10 +42,19 @@ public sealed class MethodResolverOrchestrator(
             return discovered.Select(AppRecord.From).ToArray();
         }
 
+        // Total steps: 1 (brew load) + 1 (choco load) + 1 (catalog) + 1 (search)
+        const int totalSteps = 4;
+        var completedSteps = 0;
+
         logger.LogDebug("Resolving methods for {Count} unresolved app(s)", unresolved.Length);
 
+        renderer.RenderResolverProgress(completedSteps, totalSteps, "loading Homebrew data");
         var (casks, formulas, brewDescriptions) = await LoadBrewInstalledAsync(cancellationToken).ConfigureAwait(false);
+        completedSteps++;
+
+        renderer.RenderResolverProgress(completedSteps, totalSteps, "loading Chocolatey data");
         var chocoPackages = await LoadChocoInstalledAsync(cancellationToken).ConfigureAwait(false);
+        completedSteps++;
 
         var resolved = new Dictionary<string, (UpdateMethod Method, string? Detail, string? Description)>(StringComparer.OrdinalIgnoreCase);
 
@@ -83,6 +93,8 @@ public sealed class MethodResolverOrchestrator(
             .Where(a => a.Kind == AppKind.App && !resolved.ContainsKey(a.Name))
             .ToArray();
 
+        renderer.RenderResolverProgress(completedSteps, totalSteps, $"catalog lookup ({catalogCandidates.Length} apps)");
+
         if (catalogCandidates.Length > 0)
         {
             var catalog = await LoadBrewCatalogAsync(catalogCandidates, cancellationToken).ConfigureAwait(false);
@@ -90,11 +102,15 @@ public sealed class MethodResolverOrchestrator(
             logger.LogDebug("Brew catalog: resolved {Count} additional app(s)", catalog.Count);
         }
 
+        completedSteps++;
+
         // Final fallback: for apps still unresolved, use `brew search --cask` for fuzzy matching
         // then validate by comparing the cask's catalog version against the installed version.
         var searchCandidates = unresolved
             .Where(a => a.Kind == AppKind.App && !resolved.ContainsKey(a.Name) && a.InstalledVersion is not null)
             .ToArray();
+
+        renderer.RenderResolverProgress(completedSteps, totalSteps, $"fuzzy search ({searchCandidates.Length} apps)");
 
         if (searchCandidates.Length > 0)
         {

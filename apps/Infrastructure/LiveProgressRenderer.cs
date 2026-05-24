@@ -219,6 +219,26 @@ public sealed class LiveProgressRenderer(
         }
     }
 
+    /// <summary>
+    /// Updates the single resolver-progress line in-place, showing a progress bar with
+    /// the current step label and completion count.
+    /// </summary>
+    public void RenderResolverProgress(int done, int total, string stepLabel)
+    {
+        lock (_lock)
+        {
+            var bar = AnsiStyle.ProgressBar(done, total);
+            var label = AnsiStyle.Cyan("Resolving");
+            var line = $"{bar}  {label} {AnsiStyle.Dim(stepLabel)} ({done}/{total})";
+            _currentStatusLine = line;
+
+            if (AnsiStyle.IsAnsi)
+            {
+                Console.Error.Write($"\r\e[2K{line}");
+            }
+        }
+    }
+
     /// <summary>Clears the phase indicator and prints a styled completion message.</summary>
     public void RenderPhaseEnd(string message)
     {

@@ -65,7 +65,7 @@ public sealed class UpdateOrchestrator(
 
         renderer.RenderPhaseStart("Resolving update methods…");
         var resolved = await resolver.RunAsync(discovered, cancellationToken).ConfigureAwait(false);
-        renderer.RenderPhaseEnd("Method resolution complete");
+        renderer.RenderPhaseEnd($"Resolved update methods for {resolved.Count} apps");
 
         // Mark pinned packages before update checking so checkers can skip them
         foreach (var app in resolved)
