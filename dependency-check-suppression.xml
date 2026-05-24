@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+    <!-- False positive: CVE-2015-0897 is about LINE messaging app (Android/iOS), not System.CommandLine -->
+    <suppress>
+        <notes><![CDATA[
+            CVE-2015-0897 affects the LINE messaging application for Android/iOS.
+            It has no relation to the Microsoft System.CommandLine NuGet package.
+            This is a CPE name-matching false positive.
+        ]]></notes>
+        <packageUrl regex="true">^pkg:nuget/System\.CommandLine@.*$</packageUrl>
+        <cve>CVE-2015-0897</cve>
+    </suppress>
+</suppressions>
+
