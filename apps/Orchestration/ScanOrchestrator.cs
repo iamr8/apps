@@ -68,6 +68,10 @@ public sealed class ScanOrchestrator(
         // Pre-establish HTTP connections to registry hosts while scanners run.
         var warmupTask = warmup.WarmAsync(cancellationToken);
 
+        // Periodic timer to refresh the scan progress line with updated elapsed time
+        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var timerTask = renderer.RunScanTimerAsync(timerCts.Token);
+
         var producerTask = Task.WhenAll(activeScanners.Select(s => RunScannerAsync(s, channel.Writer, cancellationToken)))
             .ContinueWith(t =>
             {
@@ -80,6 +84,9 @@ public sealed class ScanOrchestrator(
 
         await producerTask.ConfigureAwait(false);
         await warmupTask.ConfigureAwait(false);
+
+        await timerCts.CancelAsync().ConfigureAwait(false);
+        try { await timerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
 
         renderer.RenderScanComplete(results.Count);
         logger.LogInformation("Scan complete: {Total} apps discovered", results.Count);

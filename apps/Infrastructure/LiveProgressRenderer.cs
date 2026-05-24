@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using apps.Checkers;
 using apps.Components.Audit;
 using apps.Infrastructure.Logging;
@@ -36,6 +38,9 @@ public sealed class LiveProgressRenderer(
     private int _completedScanners;
     private int _totalToCheck;
 
+    private readonly Stopwatch _phaseStopwatch = new();
+    private int _checkDone;
+
     /// <summary>Clears the terminal screen before a fresh pipeline run.</summary>
     public static void RenderClear()
     {
@@ -56,6 +61,7 @@ public sealed class LiveProgressRenderer(
         {
             _totalScanners = total;
             _completedScanners = 0;
+            _phaseStopwatch.Restart();
         }
     }
 
@@ -65,6 +71,7 @@ public sealed class LiveProgressRenderer(
         lock (_lock)
         {
             _totalToCheck = total;
+            _phaseStopwatch.Restart();
         }
     }
 
@@ -80,7 +87,8 @@ public sealed class LiveProgressRenderer(
         {
             var bar = AnsiStyle.ProgressBar(_completedScanners, _totalScanners);
             var label = AnsiStyle.Cyan("Scanning");
-            var line = $"{bar}  {label} {AnsiStyle.Bold(scannerName)}…";
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            var line = $"{bar}  {label} {AnsiStyle.Bold(scannerName)}… {elapsed}";
             var firstLine = _currentStatusLine.Length == 0;
             _currentStatusLine = line;
 
@@ -104,7 +112,8 @@ public sealed class LiveProgressRenderer(
 
             var bar = AnsiStyle.ProgressBar(_completedScanners, _totalScanners);
             var label = AnsiStyle.Cyan("Scanning");
-            var line = $"{bar}  {label} {AnsiStyle.Dim(scannerName)} ✓";
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            var line = $"{bar}  {label} {AnsiStyle.Dim(scannerName)} ✓ {elapsed}";
             _currentStatusLine = line;
 
             if (AnsiStyle.IsAnsi)
@@ -121,7 +130,8 @@ public sealed class LiveProgressRenderer(
         {
             ClearStatusLine();
             var bar = AnsiStyle.ProgressBar(_totalScanners, _totalScanners);
-            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Discovered {AnsiStyle.Bold(total.ToString())} apps");
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Discovered {AnsiStyle.Bold(total.ToString())} apps {elapsed}");
             _currentStatusLine = "";
         }
     }
@@ -134,9 +144,11 @@ public sealed class LiveProgressRenderer(
     {
         lock (_lock)
         {
+            _checkDone = done;
             var bar = AnsiStyle.ProgressBar(done, _totalToCheck);
             var label = AnsiStyle.Magenta("Checking");
-            var line = $"{bar}  {label} {AnsiStyle.Bold(done.ToString())}/{_totalToCheck} apps…";
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            var line = $"{bar}  {label} {AnsiStyle.Bold(done.ToString())}/{_totalToCheck} apps… {elapsed}";
             _currentStatusLine = line;
 
             if (AnsiStyle.IsAnsi)
@@ -157,11 +169,12 @@ public sealed class LiveProgressRenderer(
             _currentStatusLine = "";
 
             var bar = AnsiStyle.ProgressBar(total, total);
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
             var updateStr = updates > 0
                 ? AnsiStyle.Yellow($"{updates} update{(updates == 1 ? "" : "s")} available")
                 : AnsiStyle.Green("up to date");
             var errorPart = errors > 0 ? "  " + AnsiStyle.Red($"{errors} error{(errors == 1 ? "" : "s")}") : "";
-            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Checked {AnsiStyle.Bold(total.ToString())} apps — {updateStr}{errorPart}");
+            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Checked {AnsiStyle.Bold(total.ToString())} apps — {updateStr}{errorPart} {elapsed}");
         }
     }
 
@@ -205,6 +218,7 @@ public sealed class LiveProgressRenderer(
         lock (_lock)
         {
             ClearStatusLine();
+            _phaseStopwatch.Restart();
             var styled = $"{AnsiStyle.Cyan("●")} {AnsiStyle.Dim(message)}";
             _currentStatusLine = styled;
 
@@ -221,15 +235,16 @@ public sealed class LiveProgressRenderer(
 
     /// <summary>
     /// Updates the single resolver-progress line in-place, showing a progress bar with
-    /// the current step label and completion count.
+    /// the current step label, completion count, and elapsed seconds.
     /// </summary>
-    public void RenderResolverProgress(int done, int total, string stepLabel)
+    public void RenderResolverProgress(int done, int total, string stepLabel, double elapsedSeconds = 0)
     {
         lock (_lock)
         {
             var bar = AnsiStyle.ProgressBar(done, total);
             var label = AnsiStyle.Cyan("Resolving");
-            var line = $"{bar}  {label} {AnsiStyle.Dim(stepLabel)} ({done}/{total})";
+            var elapsed = elapsedSeconds > 0 ? $" {FormatElapsed(elapsedSeconds)}" : "";
+            var line = $"{bar}  {label} {AnsiStyle.Dim(stepLabel)} ({done}/{total}){elapsed}";
             _currentStatusLine = line;
 
             if (AnsiStyle.IsAnsi)
@@ -239,13 +254,14 @@ public sealed class LiveProgressRenderer(
         }
     }
 
-    /// <summary>Clears the phase indicator and prints a styled completion message.</summary>
+    /// <summary>Clears the phase indicator and prints a styled completion message with elapsed time.</summary>
     public void RenderPhaseEnd(string message)
     {
         lock (_lock)
         {
             ClearStatusLine();
-            Console.Error.WriteLine($"{AnsiStyle.Green("✓")} {message}");
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            Console.Error.WriteLine($"{AnsiStyle.Green("✓")} {message} {elapsed}");
             _currentStatusLine = "";
         }
     }
@@ -263,6 +279,75 @@ public sealed class LiveProgressRenderer(
         if (AnsiStyle.IsAnsi && _currentStatusLine.Length > 0)
         {
             Console.Error.Write(_currentStatusLine);
+        }
+    }
+
+    private static string FormatElapsed(double seconds)
+        => AnsiStyle.DarkGray($"[{seconds:F1}s]");
+
+    /// <summary>
+    /// Background task that refreshes the scan progress line every 100ms with updated elapsed time.
+    /// </summary>
+    public async Task RunScanTimerAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            lock (_lock)
+            {
+                if (!AnsiStyle.IsAnsi || _currentStatusLine.Length == 0)
+                {
+                    continue;
+                }
+
+                var bar = AnsiStyle.ProgressBar(_completedScanners, _totalScanners);
+                var label = AnsiStyle.Cyan("Scanning");
+                var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+                var line = $"{bar}  {label} {elapsed}";
+                _currentStatusLine = line;
+                Console.Error.Write($"\r\e[2K{line}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Background task that refreshes the check progress line every 100ms with updated elapsed time.
+    /// </summary>
+    public async Task RunCheckTimerAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            lock (_lock)
+            {
+                if (!AnsiStyle.IsAnsi || _currentStatusLine.Length == 0)
+                {
+                    continue;
+                }
+
+                var bar = AnsiStyle.ProgressBar(_checkDone, _totalToCheck);
+                var label = AnsiStyle.Magenta("Checking");
+                var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+                var line = $"{bar}  {label} {AnsiStyle.Bold(_checkDone.ToString())}/{_totalToCheck} apps… {elapsed}";
+                _currentStatusLine = line;
+                Console.Error.Write($"\r\e[2K{line}");
+            }
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -48,12 +49,14 @@ public sealed class MethodResolverOrchestrator(
 
         logger.LogDebug("Resolving methods for {Count} unresolved app(s)", unresolved.Length);
 
-        renderer.RenderResolverProgress(completedSteps, totalSteps, "loading Homebrew data");
-        var (casks, formulas, brewDescriptions) = await LoadBrewInstalledAsync(cancellationToken).ConfigureAwait(false);
+        var (casks, formulas, brewDescriptions) = await RunStepWithTimerAsync(
+            completedSteps, totalSteps, "loading Homebrew data",
+            ct => LoadBrewInstalledAsync(ct), cancellationToken).ConfigureAwait(false);
         completedSteps++;
 
-        renderer.RenderResolverProgress(completedSteps, totalSteps, "loading Chocolatey data");
-        var chocoPackages = await LoadChocoInstalledAsync(cancellationToken).ConfigureAwait(false);
+        var chocoPackages = await RunStepWithTimerAsync(
+            completedSteps, totalSteps, "loading Chocolatey data",
+            ct => LoadChocoInstalledAsync(ct), cancellationToken).ConfigureAwait(false);
         completedSteps++;
 
         var resolved = new Dictionary<string, (UpdateMethod Method, string? Detail, string? Description)>(StringComparer.OrdinalIgnoreCase);
@@ -93,11 +96,11 @@ public sealed class MethodResolverOrchestrator(
             .Where(a => a.Kind == AppKind.App && !resolved.ContainsKey(a.Name))
             .ToArray();
 
-        renderer.RenderResolverProgress(completedSteps, totalSteps, $"catalog lookup ({catalogCandidates.Length} apps)");
-
         if (catalogCandidates.Length > 0)
         {
-            var catalog = await LoadBrewCatalogAsync(catalogCandidates, cancellationToken).ConfigureAwait(false);
+            var catalog = await RunStepWithTimerAsync(
+                completedSteps, totalSteps, $"catalog lookup ({catalogCandidates.Length} apps)",
+                ct => LoadBrewCatalogAsync(catalogCandidates, ct), cancellationToken).ConfigureAwait(false);
             ApplyCatalogMatches(catalogCandidates, catalog, resolved);
             logger.LogDebug("Brew catalog: resolved {Count} additional app(s)", catalog.Count);
         }
@@ -110,11 +113,11 @@ public sealed class MethodResolverOrchestrator(
             .Where(a => a.Kind == AppKind.App && !resolved.ContainsKey(a.Name) && a.InstalledVersion is not null)
             .ToArray();
 
-        renderer.RenderResolverProgress(completedSteps, totalSteps, $"fuzzy search ({searchCandidates.Length} apps)");
-
         if (searchCandidates.Length > 0)
         {
-            var searchResults = await SearchBrewCasksAsync(searchCandidates, cancellationToken).ConfigureAwait(false);
+            var searchResults = await RunStepWithTimerAsync(
+                completedSteps, totalSteps, $"fuzzy search ({searchCandidates.Length} apps)",
+                ct => SearchBrewCasksAsync(searchCandidates, ct), cancellationToken).ConfigureAwait(false);
 
             foreach (var (appName, method, detail, desc) in searchResults)
             {
@@ -608,6 +611,57 @@ public sealed class MethodResolverOrchestrator(
 
         logger.LogDebug("Chocolatey installed: {Count} package(s) indexed", packages.Count);
         return packages;
+    }
+
+    /// <summary>
+    /// Executes an async step while continuously refreshing the progress line with a live
+    /// elapsed-seconds counter (updated every 100ms).
+    /// </summary>
+    private async Task<T> RunStepWithTimerAsync<T>(
+        int completedSteps,
+        int totalSteps,
+        string stepLabel,
+        Func<CancellationToken, Task<T>> stepAction,
+        CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        var timerTask = Task.Run(async () =>
+        {
+            while (!timerCts.Token.IsCancellationRequested)
+            {
+                renderer.RenderResolverProgress(completedSteps, totalSteps, stepLabel, sw.Elapsed.TotalSeconds);
+                try
+                {
+                    await Task.Delay(100, timerCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+        }, timerCts.Token);
+
+        try
+        {
+            var result = await stepAction(cancellationToken).ConfigureAwait(false);
+            return result;
+        }
+        finally
+        {
+            await timerCts.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await timerTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected
+            }
+
+            renderer.RenderResolverProgress(completedSteps + 1, totalSteps, $"{stepLabel} ✓", sw.Elapsed.TotalSeconds);
+        }
     }
 
     private static string NormalizeName(string name)

@@ -76,6 +76,10 @@ public sealed class CheckOrchestrator(
         var totalToCheck = checkGroups.Sum(g => g.eligible.Count);
         renderer.SetCheckTotal(totalToCheck);
 
+        // Periodic timer to refresh the check progress line with updated elapsed time
+        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var timerTask = renderer.RunCheckTimerAsync(timerCts.Token);
+
         var checkTasks = checkGroups
             .Select(g => CheckGroupAsync(g.method, g.eligible, g.checker, resultChannel.Writer, cancellationToken))
             .ToList();
@@ -120,6 +124,9 @@ public sealed class CheckOrchestrator(
 
             renderer.RenderCheckActive(total);
         }
+
+        await timerCts.CancelAsync().ConfigureAwait(false);
+        try { await timerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
 
         renderer.RenderCheckComplete(total, updates, errors);
         logger.LogInformation(
