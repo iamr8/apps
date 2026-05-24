@@ -334,6 +334,10 @@ VERSION          ← contains e.g. "1.2.0" (no "v" prefix, no trailing newline b
 2. Commit: `git commit -am "chore: bump version to X.Y.Z"`
 3. Push: `git push origin main`
 
+> **⚠️ CRITICAL:** The VERSION file change must be in its own **single, dedicated commit** with
+> exactly the message `chore: bump version to X.Y.Z`. Never combine it with other changes.
+> This is required for the CI tagging pipeline to work correctly.
+
 The CI pipeline (`.github/workflows/tag.yml`) detects the VERSION change, creates and pushes
 `vX.Y.Z` tag automatically, which then triggers the release workflow
 (`.github/workflows/release.yml`) to build AOT binaries and publish a GitHub Release.
