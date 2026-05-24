@@ -79,9 +79,24 @@ public sealed class UpdateOrchestrator(
         var (_, _, errors) = await checker.RunAsync(resolved, cancellationToken).ConfigureAwait(false);
 
         // Always run CVE audit (skipped only in dry-run mode which returns early above)
-        renderer.RenderPhaseStart("Auditing packages for known vulnerabilities…");
-        var auditResults = await auditor.AuditAsync(resolved, cancellationToken).ConfigureAwait(false);
-        renderer.RenderPhaseEnd($"Audit complete — {auditResults.Count} vulnerable package{(auditResults.Count == 1 ? "" : "s")} found");
+        renderer.SetAuditTotal(1);
+        using var auditTimerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var auditTimerTask = renderer.RunAuditTimerAsync(auditTimerCts.Token);
+        var auditBatchTotal = 1;
+
+        var auditResults = await auditor.AuditAsync(
+            resolved,
+            (done, total) =>
+            {
+                auditBatchTotal = total;
+                renderer.RenderAuditProgress(done, total);
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        await auditTimerCts.CancelAsync().ConfigureAwait(false);
+        try { await auditTimerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+
+        renderer.RenderAuditComplete(auditBatchTotal, auditResults.Count);
 
         foreach (var result in auditResults)
         {

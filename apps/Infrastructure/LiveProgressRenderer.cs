@@ -40,6 +40,8 @@ public sealed class LiveProgressRenderer(
 
     private readonly Stopwatch _phaseStopwatch = new();
     private int _checkDone;
+    private int _auditDone;
+    private int _auditTotal;
 
     /// <summary>Clears the terminal screen before a fresh pipeline run.</summary>
     public static void RenderClear()
@@ -276,6 +278,86 @@ public sealed class LiveProgressRenderer(
             var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
             Console.Error.WriteLine($"{AnsiStyle.Green("✓")} {message} {elapsed}");
             _currentStatusLine = "";
+        }
+    }
+
+    /// <summary>Updates the audit progress line in-place with batch count and elapsed time.</summary>
+    public void RenderAuditProgress(int done, int total)
+    {
+        lock (_lock)
+        {
+            _auditDone = done;
+            _auditTotal = total;
+            var bar = AnsiStyle.ProgressBar(done, total);
+            var label = AnsiStyle.Cyan("Auditing");
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            var line = $"{bar}  {label} {AnsiStyle.Bold(done.ToString())}/{total} batches… {elapsed}";
+            _currentStatusLine = line;
+
+            if (AnsiStyle.IsAnsi)
+            {
+                Console.Error.Write($"\r\e[2K{line}");
+            }
+        }
+    }
+
+    /// <summary>Clears the audit progress line and prints a completed progress bar with summary.</summary>
+    public void RenderAuditComplete(int total, int vulnerableCount)
+    {
+        lock (_lock)
+        {
+            ClearStatusLine();
+            var bar = AnsiStyle.ProgressBar(total, total);
+            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+            var vulnStr = vulnerableCount > 0
+                ? AnsiStyle.Red($"{vulnerableCount} vulnerable package{(vulnerableCount == 1 ? "" : "s")} found")
+                : AnsiStyle.Green("no vulnerabilities found");
+            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Audit complete — {vulnStr} {elapsed}");
+            _currentStatusLine = "";
+        }
+    }
+
+    /// <summary>
+    /// Background task that refreshes the audit progress line every 100ms with updated elapsed time.
+    /// </summary>
+    public async Task RunAuditTimerAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            lock (_lock)
+            {
+                if (!AnsiStyle.IsAnsi || _currentStatusLine.Length == 0)
+                {
+                    continue;
+                }
+
+                var bar = AnsiStyle.ProgressBar(_auditDone, _auditTotal);
+                var label = AnsiStyle.Cyan("Auditing");
+                var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
+                var line = $"{bar}  {label} {AnsiStyle.Bold(_auditDone.ToString())}/{_auditTotal} batches… {elapsed}";
+                _currentStatusLine = line;
+                Console.Error.Write($"\r\e[2K{line}");
+            }
+        }
+    }
+
+    /// <summary>Sets the audit totals for the timer background task.</summary>
+    public void SetAuditTotal(int total)
+    {
+        lock (_lock)
+        {
+            _auditTotal = total;
+            _auditDone = 0;
+            _phaseStopwatch.Restart();
         }
     }
 

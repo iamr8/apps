@@ -23,6 +23,7 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, ILogge
     /// </summary>
     public async Task<IReadOnlyList<AuditResult>> AuditAsync(
         IReadOnlyList<AppRecord> apps,
+        Action<int, int>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
         var auditable = apps
@@ -35,12 +36,16 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, ILogge
             return [];
         }
 
+        var batches = auditable.Chunk(BatchSize).ToArray();
         var results = new List<AuditResult>();
+        var completed = 0;
 
-        foreach (var batch in auditable.Chunk(BatchSize))
+        foreach (var batch in batches)
         {
             var batchResults = await QueryBatchAsync(batch, cancellationToken).ConfigureAwait(false);
             results.AddRange(batchResults);
+            completed++;
+            onProgress?.Invoke(completed, batches.Length);
         }
 
         return results;
