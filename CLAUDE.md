@@ -6,7 +6,8 @@
 every installed application, SDK, runtime, developer tool, and library on a Mac and checks each one
 for available updates. All state is in-memory only — every run re-scans and re-checks from scratch.
 
-> Design principles, discovery sources, update-check logic, pipeline architecture, and performance details are documented in [DESIGN.md](DESIGN.md).
+> Design principles, discovery sources, update-check logic, pipeline architecture, and performance details are
+> documented in [DESIGN.md](DESIGN.md).
 
 ## Tech Stack
 
@@ -97,7 +98,8 @@ apps/
   JSON, and prefer value types and spans over heap allocations in hot paths.
 - **Extensible (Vertical Slices)** — each component lives in its own `Components/<Name>/` folder containing scanners,
   checkers, JSON models, and a `<Name>Registration.cs` extension method. Adding a new component (e.g. Rust) means
-  creating a new folder, implementing the slice, and chaining its registration in `ComponentRegistration.AddAllComponents()`.
+  creating a new folder, implementing the slice, and chaining its registration in
+  `ComponentRegistration.AddAllComponents()`.
 - **Non-destructive** — the tool reports what is outdated; it never performs updates itself.
 - **Graceful shutdown** — `Console.CancelKeyPress` (Ctrl+C) and `PosixSignalRegistration` (SIGTERM) cancel the
   root `CancellationTokenSource`. The token propagates through all scanners, checkers, HTTP calls, and subprocesses
@@ -269,3 +271,45 @@ dotnet test
 33. Never write single-line block bodies for control flow constructs. Opening and closing braces for `try`, `catch`,
     `if`, `else`, `for`, `while`, `using`, etc. must each occupy their own line.
 34. All compiler warnings must be resolved before a change is considered complete. Never leave a warning unaddressed.
+
+## Commit Convention
+
+This project follows [Conventional Commits](https://www.conventionalcommits.org/). Every commit message uses the format:
+
+```
+<type>(<scope>): <short description>
+```
+
+| Type    | When to use                                                  |
+|---------|--------------------------------------------------------------|
+| `feat`  | A new feature or meaningful change to existing functionality |
+| `fix`   | A bug fix                                                    |
+| `docs`  | Documentation-only changes (README, CLAUDE.md, DESIGN.md)    |
+| `ci`    | Changes to GitHub Actions workflows or CI configuration      |
+| `test`  | Adding or updating tests                                     |
+| `perf`  | Performance improvements with no functional change           |
+| `chore` | Routine maintenance (dependency bumps managed by Dependabot) |
+
+**Scopes** (optional, in parentheses):
+
+| Scope  | Meaning                  |
+|--------|--------------------------|
+| `deps` | Dependency version bumps |
+
+**Examples:**
+
+```
+feat: add Rust toolchain scanner and crates.io checker
+fix: handle nil version in Sparkle appcast response
+docs: update README badges — remove redundant tag
+ci: add CI, SBOM generation, and license compliance workflows
+ci(deps): bump actions/checkout from 4 to 6
+chore(deps): bump Serilog from 4.3.0 to 4.3.1
+```
+
+**Rules:**
+
+- Use lowercase for the entire subject line.
+- No period at the end.
+- Keep the subject under 72 characters.
+- Use imperative mood ("add", "fix", "update" — not "added", "fixes", "updated").
