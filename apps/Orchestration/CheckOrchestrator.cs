@@ -91,16 +91,11 @@ public sealed class CheckOrchestrator(
                 resultChannel.Writer.TryComplete();
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
 
-        int total = 0, updates = 0, errors = 0;
+        int total = 0, errors = 0;
 
         await foreach (var result in resultChannel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             total++;
-
-            if (result.UpdateAvailable)
-            {
-                updates++;
-            }
 
             if (result.Error is not null)
             {
@@ -128,12 +123,19 @@ public sealed class CheckOrchestrator(
         await timerCts.CancelAsync().ConfigureAwait(false);
         try { await timerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
 
-        renderer.RenderCheckComplete(total, updates, errors);
+        // Count unique non-system apps with available updates (matches the final summary logic)
+        var uniqueUpdates = apps
+            .Where(a => a.Kind != AppKind.SystemApp && a.UpdateAvailable)
+            .Select(a => a.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        renderer.RenderCheckComplete(total, uniqueUpdates, errors);
         logger.LogInformation(
             "Check complete: {Total} checked, {Updates} updates, {Errors} errors",
-            total, updates, errors);
+            total, uniqueUpdates, errors);
 
-        return (total, updates, errors);
+        return (total, uniqueUpdates, errors);
     }
 
     private async Task CheckGroupAsync(

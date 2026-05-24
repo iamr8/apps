@@ -128,7 +128,11 @@ public sealed class UpdateOrchestrator(
 
         renderer.RenderTable(visible);
 
-        var totalUpdates = resolved.Count(a => a.Kind != AppKind.SystemApp && a.UpdateAvailable);
+        var totalUpdates = resolved
+            .Where(a => a.Kind != AppKind.SystemApp && a.UpdateAvailable)
+            .Select(a => a.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
         var totalPinned = resolved.Count(a => a.IsPinned);
         var totalVulnerable = resolved.Count(a => a.Vulnerabilities is { Count: > 0 });
 
