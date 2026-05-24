@@ -5,12 +5,15 @@ A macOS CLI tool that discovers every installed application, SDK, runtime, devel
 The tool is **non-destructive**: it reports what is outdated but never performs updates itself.
 
 
+![Build Status](https://img.shields.io/github/actions/workflow/status/iamr8/apps/ci.yml?branch=main&style=flat-square&label=build)
+![Security](https://img.shields.io/github/actions/workflow/status/iamr8/apps/security.yml?branch=main&style=flat-square&label=security)
+![Latest Release](https://img.shields.io/github/v/release/iamr8/apps?style=flat-square)
+![License](https://img.shields.io/github/license/iamr8/apps?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-macOS-blue?style=flat-square)
+![.NET](https://img.shields.io/badge/.NET-10-purple?style=flat-square)
 ![Commits](https://img.shields.io/github/commit-activity/m/iamr8/apps?style=flat-square&label=commits)
 ![Last Commit](https://img.shields.io/github/last-commit/iamr8/apps?style=flat-square)
 ![Language](https://img.shields.io/github/languages/top/iamr8/apps?style=flat-square)
-![Build Status](https://img.shields.io/github/actions/workflow/status/iamr8/apps/ci.yml?branch=main&style=flat-square)
-![Latest Release](https://img.shields.io/github/v/release/iamr8/apps?style=flat-square)
-![Latest Tag](https://img.shields.io/github/v/tag/iamr8/apps?style=flat-square)
 
 ## Features
 
