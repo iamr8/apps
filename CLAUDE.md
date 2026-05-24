@@ -188,6 +188,7 @@ apps --kind | -k <kind>    # show all apps of a specific kind
 apps --dry-run | -d         # scan only — show discovered apps without checking for updates
 apps --pin | -p <name>     # pin a package at its current version (suppresses update notifications)
 apps --unpin <name>        # remove a pin from a package
+apps --upgrade              # check if a newer version of apps is available
 ```
 
 - macOS 13+
@@ -313,3 +314,50 @@ chore(deps): bump Serilog from 4.3.0 to 4.3.1
 - No period at the end.
 - Keep the subject under 72 characters.
 - Use imperative mood ("add", "fix", "update" — not "added", "fixes", "updated").
+
+## Versioning, Tagging & Releasing
+
+This project uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
+
+### VERSION File
+
+The single source of truth for the app version is the `VERSION` file at the repository root.
+The `.csproj` reads from it at build time — there is no need to edit version numbers in XML.
+
+```
+VERSION          ← contains e.g. "1.2.0" (no "v" prefix, no trailing newline beyond one LF)
+```
+
+### How to Bump the Version
+
+1. Edit the `VERSION` file with the new version number.
+2. Commit: `git commit -am "chore: bump version to X.Y.Z"`
+3. Tag: `git tag vX.Y.Z`
+4. Push: `git push origin main --tags`
+
+### Tagging Rules
+
+- Tags use a `v` prefix: `v1.0.0`, `v1.1.0`, `v2.0.0-beta.1`.
+- Every tag must correspond exactly to the content of the `VERSION` file at that commit.
+- Never move or delete a published tag.
+
+### Creating a GitHub Release
+
+1. Push the tag (see above).
+2. On GitHub, go to **Releases → Draft a new release**.
+3. Select the tag, write release notes summarising changes since the last release.
+4. Attach the AOT-published binary (`publish/apps`) if available.
+5. Publish.
+
+The `--upgrade` flag in the CLI checks the latest GitHub Release tag against the embedded
+version and notifies the user when a newer release is available.
+
+### When to Increment
+
+| Change type                              | Bump    |
+|------------------------------------------|---------|
+| Breaking CLI interface or output format  | `MAJOR` |
+| New scanner, checker, or CLI option      | `MINOR` |
+| Bug fix, performance tweak, docs update  | `PATCH` |
+
+
