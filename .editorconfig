@@ -1,0 +1,78 @@
+﻿[*.cs]
+
+# CS8602: Dereference of a possibly null reference.
+dotnet_diagnostic.CS8602.severity                            = none
+
+# HAA0101: Array allocation for params parameter
+dotnet_diagnostic.HAA0101.severity                           = none
+
+# HAA0302: Display class allocation to capture closure
+dotnet_diagnostic.HAA0302.severity                           = none
+
+# HAA0301: Closure Allocation Source
+dotnet_diagnostic.HAA0301.severity                           = none
+
+# HAA0603: Delegate allocation from a method group
+dotnet_diagnostic.HAA0603.severity                           = none
+
+# HAA0502: Explicit new reference type allocation
+dotnet_diagnostic.HAA0502.severity                           = none
+
+# HAA0505: Initializer reference type allocation
+dotnet_diagnostic.HAA0505.severity                           = none
+
+# Organize usings
+dotnet_separate_import_directive_groups                      = true
+dotnet_sort_system_directives_first                          = true
+
+# this. and Me. preferences
+dotnet_style_qualification_for_event                         = false
+dotnet_style_qualification_for_field                         = false
+dotnet_style_qualification_for_method                        = false
+dotnet_style_qualification_for_property                      = false
+
+# Parentheses preferences
+dotnet_style_parentheses_in_arithmetic_binary_operators      = always_for_clarity
+dotnet_style_parentheses_in_other_binary_operators           = always_for_clarity
+dotnet_style_parentheses_in_other_operators                  = never_if_unnecessary
+dotnet_style_parentheses_in_relational_binary_operators      = always_for_clarity
+
+# var preferences
+csharp_style_var_elsewhere                                   = true
+csharp_style_var_for_built_in_types                          = true
+csharp_style_var_when_type_is_apparent                       = true
+
+# Code-block preferences
+csharp_prefer_braces                                         = true
+csharp_prefer_simple_using_statement                         = false
+csharp_style_prefer_method_group_conversion                  = false
+csharp_style_prefer_primary_constructors                     = false
+csharp_style_prefer_top_level_statements                     = false
+
+resharper_csharp_braces_for_ifelse                           = required_for_multiline
+resharper_csharp_braces_for_while                            = required_for_multiline
+resharper_csharp_braces_for_using                            = required_for_multiline
+resharper_csharp_braces_for_for                              = required_for_multiline
+resharper_csharp_braces_for_foreach                          = required_for_multiline
+resharper_csharp_place_attribute_on_same_line                = false
+resharper_csharp_place_accessor_attribute_on_same_line       = false
+resharper_csharp_place_field_attribute_on_same_line          = false
+resharper_csharp_place_method_attribute_on_same_line         = false
+resharper_csharp_place_accessorholder_attribute_on_same_line = false
+resharper_csharp_place_type_attribute_on_same_line           = false
+resharper_csharp_place_parameter_attribute_on_same_line      = false
+resharper_csharp_place_local_function_attribute_on_same_line = false
+resharper_place_attribute_on_same_line                       = false
+resharper_place_property_attribute_on_same_line              = false
+resharper_place_field_attribute_on_same_line                 = false
+resharper_place_method_attribute_on_same_line                = false
+resharper_place_accessorholder_attribute_on_same_line        = false
+resharper_place_type_attribute_on_same_line                  = false
+resharper_place_parameter_attribute_on_same_line             = false
+resharper_csharp_place_record_field_attribute_on_same_line   = false
+resharper_place_accessor_attribute_on_same_line              = false
+resharper_place_event_attribute_on_same_line                 = false
+resharper_place_record_field_attribute_on_same_line          = false
+dotnet_separate_import_directive_groups                      = true
+dotnet_sort_system_directives_first                          = true
+dotnet_style_namespace_match_folder                          = true
