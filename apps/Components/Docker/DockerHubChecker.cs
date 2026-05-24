@@ -90,15 +90,21 @@ public sealed class DockerHubChecker(IHttpClientFactory httpClientFactory, ILogg
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            var remoteDigest = tagInfo?.Images?
-                .FirstOrDefault(img =>
-                    string.Equals(img.Os, "linux", StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(img.Architecture, PreferredArch, StringComparison.OrdinalIgnoreCase))
-                ?.Digest;
+            // Prefer the manifest-list digest — this is what `docker images` reports locally.
+            // Fall back to per-architecture image digest only when the tag-level digest is absent.
+            var remoteDigest = tagInfo?.Digest;
 
             if (string.IsNullOrWhiteSpace(remoteDigest))
             {
-                // Fallback: any linux image
+                remoteDigest = tagInfo?.Images?
+                    .FirstOrDefault(img =>
+                        string.Equals(img.Os, "linux", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(img.Architecture, PreferredArch, StringComparison.OrdinalIgnoreCase))
+                    ?.Digest;
+            }
+
+            if (string.IsNullOrWhiteSpace(remoteDigest))
+            {
                 remoteDigest = tagInfo?.Images?
                     .FirstOrDefault(img => string.Equals(img.Os, "linux", StringComparison.OrdinalIgnoreCase))
                     ?.Digest;
@@ -182,6 +188,12 @@ internal sealed class DockerTagInfo
 {
     [JsonPropertyName("name")]
     public string? Name { get; init; }
+
+    /// <summary>
+    /// Manifest list (multi-arch index) digest — matches what <c>docker images</c> reports locally.
+    /// </summary>
+    [JsonPropertyName("digest")]
+    public string? Digest { get; init; }
 
     [JsonPropertyName("images")]
     public DockerImageInfo[]? Images { get; init; }
