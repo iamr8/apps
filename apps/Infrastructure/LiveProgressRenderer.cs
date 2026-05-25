@@ -923,13 +923,13 @@ public sealed class LiveProgressRenderer(
         return app.UpdateMethod switch
         {
             UpdateMethod.AppStore when detail is not null => $"mas upgrade {detail}",
-            UpdateMethod.HomebrewCask when detail is not null => $"brew upgrade --cask {ExtractCaskToken(detail)}",
-            UpdateMethod.HomebrewFormula when detail is not null => $"brew upgrade {detail}",
+            UpdateMethod.HomebrewCask when detail is not null && app.Scanner == "Homebrew" => $"brew upgrade --cask {ExtractCaskToken(detail)}",
+            UpdateMethod.HomebrewFormula when detail is not null && app.Scanner == "Homebrew" => $"brew upgrade {detail}",
             UpdateMethod.MacPorts when detail is not null => $"sudo port upgrade {detail}",
             UpdateMethod.Chocolatey when detail is not null => $"choco upgrade {detail}",
             UpdateMethod.PackageRegistry => GetRegistryUpdateCommand(app),
             UpdateMethod.Specialised when app.Scanner == "Docker" && detail is not null => $"docker pull {detail}",
-            UpdateMethod.Sdk when app.Scanner is "Dotnet" or "DotnetRuntime" => "brew upgrade dotnet-sdk",
+            UpdateMethod.Sdk when app.Scanner is "Dotnet" or "DotnetRuntime" => null,
             _ => null
         };
     }
