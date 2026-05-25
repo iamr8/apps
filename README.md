@@ -28,6 +28,15 @@ The tool is **non-destructive**: it reports what is outdated but never performs 
 - Reports macOS Software Update items
 - Streams results live as checks complete
 
+## Architecture
+
+The tool uses a four-stage concurrent pipeline:
+
+1. **Discovery** — all scanners run in parallel, streaming results through a bounded channel.
+2. **Method Resolution** — apps without a suggested update method are matched against Homebrew casks/formulas and Chocolatey package catalogs. Includes catalog lookups and fuzzy search for unresolved GUI apps.
+3. **Update Check** — apps are grouped by update method; all groups run concurrently, results stream to a live renderer.
+4. **Security Audit** — all auditable packages are batch-queried against OSV.dev for known CVEs, then enriched with patched-version info from the GitHub Advisory Database.
+
 ## Requirements
 
 - macOS 13 or later
@@ -35,38 +44,6 @@ The tool is **non-destructive**: it reports what is outdated but never performs 
 - Homebrew (detected at `/opt/homebrew` or `/usr/local`)
 - Optional: `mas` CLI for App Store lookups
 - Optional: `GITHUB_TOKEN` environment variable for higher GitHub API rate limits (5000 req/hr vs 60 req/hr)
-
-## Installation
-
-### Build from Source
-
-```bash
-git clone https://github.com/iamr8/apps.git
-cd apps
-dotnet publish apps/apps.csproj -c Release -r osx-arm64 -o publish
-```
-
-For Intel Macs, use `-r osx-x64` instead.
-
-The self-contained, trimmed, AOT-compiled binary will be at `publish/apps`.
-
-To make it available system-wide:
-
-```bash
-sudo cp publish/apps /usr/local/bin/apps
-```
-
-Now you can run `apps` from any directory.
-
-### From GitHub Releases
-
-Download the latest pre-built binary from [Releases](https://github.com/iamr8/apps/releases):
-
-```bash
-tar -xzf apps-osx-arm64.tar.gz
-chmod +x apps
-sudo mv apps /usr/local/bin/
-```
 
 ## Usage
 
@@ -90,39 +67,6 @@ apps --unpin <name>     # remove a pin from a package
 | `service` | Background daemons (LaunchAgents/Daemons, Login Items)                 |
 | `ext`     | IDE extensions and editor plugins (VS Code, JetBrains)                 |
 
-## Architecture
-
-The tool uses a four-stage concurrent pipeline:
-
-1. **Discovery** — all scanners run in parallel, streaming results through a bounded channel.
-2. **Method Resolution** — apps without a suggested update method are matched against Homebrew casks/formulas and Chocolatey package catalogs. Includes catalog lookups and fuzzy search for unresolved GUI apps.
-3. **Update Check** — apps are grouped by update method; all groups run concurrently, results stream to a live renderer.
-4. **Security Audit** — all auditable packages are batch-queried against OSV.dev for known CVEs, then enriched with patched-version info from the GitHub Advisory Database.
-
-Each phase shows a live progress bar with a real-time seconds counter.
-
-Each component lives in its own vertical slice under `Components/`:
-
-```
-apps/
-  Components/
-    AppStore/       -- scanner + checker
-    Chocolatey/     -- scanner + checker
-    Docker/         -- image scanner + Docker Hub checker
-    Dotnet/         -- SDK scanner, NuGet tools, registry checker
-    Electron/       -- scanner + checker (GitHub/generic feeds)
-    GitHub/         -- GitHub Releases checker (fallback)
-    Go/             -- scanner, tools, go.mod, proxy checker
-    Homebrew/       -- scanner + cask/formula checker
-    JetBrains/      -- plugin scanner + plugin repo checker
-    MacOs/          -- Applications scanner, SW Update, Safari/Chrome extensions, Xcode
-    MacPorts/       -- scanner + checker
-    Node/           -- scanner, npm global/project, registry checker
-    Sparkle/        -- appcast checker
-    Swift/          -- Package.swift scanner
-    Vcpkg/          -- vcpkg.json scanner
-    VsCode/         -- extension scanner + marketplace checker
-```
 
 ## Supported Components
 
@@ -146,46 +90,27 @@ apps/
 | Vcpkg       | C/C++ vcpkg dependencies (vcpkg.json)                                                                  | `VcpkgScanner`                  | --                             |
 | VsCode      | VS Code extensions (marketplace)                                                                       | `VsCodeExtScanner`              | `VsCodeExtChecker`             |
 
+## Installation
 
-## Update Method Priority
-
-When multiple update channels apply to the same app, the highest priority wins:
-
-| Priority | Method           | Source                                        |
-|----------|------------------|-----------------------------------------------|
-| 1        | App Store        | `mas` CLI / bundle ID matching                |
-| 2        | Homebrew Cask    | cask name or bundle ID                        |
-| 3        | Homebrew Formula | formula name                                  |
-| 4        | Sparkle          | SUFeedURL in Info.plist                       |
-| 5        | Electron         | app-update.yml in .app bundle                 |
-| 6        | GitHub Releases  | repo detection heuristics                     |
-| 7        | MacPorts         | port name                                     |
-| 8        | Chocolatey       | choco package name                            |
-| 9        | Package Registry | NuGet, npm, Go module proxy                   |
-| 10       | Specialised      | Docker Hub, VS Code, JetBrains, macOS SW Upd  |
-| 11       | SDK              | dotnet sdk check, rustup check                |
-| 12       | None             | No mechanism found                            |
-| 13       | SelfUpdate       | PWA / browser-hosted (managed by host)        |
-
-## Log Files
-
-Logs are written to `~/.local/share/apps/log/`.
-
-## Development
+### Build from Source
 
 ```bash
-# Run in development
+git clone https://github.com/iamr8/apps.git
 cd apps
-dotnet run
-dotnet run -- -a
-dotnet run -- -k package
-
-# Build release
-dotnet build -c Release
-
-# Run tests
-dotnet test
+dotnet publish apps/apps.csproj -c Release -r osx-arm64 -o publish
 ```
+
+For Intel Macs, use `-r osx-x64` instead.
+
+The self-contained, trimmed, AOT-compiled binary will be at `publish/apps`.
+
+To make it available system-wide:
+
+```bash
+sudo cp publish/apps /usr/local/bin/apps
+```
+
+Now you can run `apps` from any directory.
 
 ## License
 
