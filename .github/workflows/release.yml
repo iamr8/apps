@@ -97,6 +97,8 @@ jobs:
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           path: artifacts
 

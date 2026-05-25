@@ -33,6 +33,8 @@ jobs:
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           name: sbom
           path: sbom/sbom.json
