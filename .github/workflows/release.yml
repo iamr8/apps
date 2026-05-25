@@ -96,9 +96,7 @@ jobs:
           echo "" >> release-notes.md
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 

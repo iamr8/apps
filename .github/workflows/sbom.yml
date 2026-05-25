@@ -32,9 +32,7 @@ jobs:
           dotnet CycloneDX apps/apps.csproj -o sbom --json --filename sbom.json
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        uses: actions/upload-artifact@v5
         with:
           name: sbom
           path: sbom/sbom.json
