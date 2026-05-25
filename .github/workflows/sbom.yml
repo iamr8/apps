@@ -32,7 +32,7 @@ jobs:
           dotnet CycloneDX apps/apps.csproj -o sbom --json --filename sbom.json
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom/sbom.json
