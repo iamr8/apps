@@ -60,7 +60,15 @@ internal sealed class BrewOutdatedCask
     public string? CurrentVersion { get; init; }
 }
 
+/// <summary>Minimal projection of <c>https://formulae.brew.sh/api/cask/{token}.json</c>.</summary>
+internal sealed class BrewCaskApiResponse
+{
+    [JsonPropertyName("version")]
+    public string? Version { get; init; }
+}
+
 [JsonSerializable(typeof(BrewInfoRoot))]
 [JsonSerializable(typeof(BrewOutdatedRoot))]
+[JsonSerializable(typeof(BrewCaskApiResponse))]
 internal sealed partial class HomebrewJsonContext : JsonSerializerContext;
 

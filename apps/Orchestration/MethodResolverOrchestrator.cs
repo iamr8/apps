@@ -427,9 +427,10 @@ public sealed class MethodResolverOrchestrator(
     }
 
     /// <summary>
-    /// Returns <c>true</c> when the installed version plausibly matches the cask catalog version.
-    /// Handles cases where the cask version has a build suffix (e.g. "1.8.0,abc123") or the installed
-    /// version is a prefix of the catalog version.
+    /// Returns <c>true</c> when the installed version plausibly matches the cask catalog version,
+    /// confirming both refer to the same product. Two versions match when they share the same
+    /// major version number, or one is a prefix of the other. This prevents false positives
+    /// from same-name but entirely different products (e.g. major version 2 vs major version 12).
     /// </summary>
     private static bool VersionMatchesInstalled(string installed, string catalogVersion)
     {
@@ -453,7 +454,30 @@ public sealed class MethodResolverOrchestrator(
             return true;
         }
 
+        // Same major version means same product (e.g. 12.11.5 and 12.12.0 are the same app)
+        var installedMajor = GetMajorVersion(installed);
+        var catalogMajor = GetMajorVersion(cleanCatalog);
+
+        if (installedMajor is not null && catalogMajor is not null)
+        {
+            return installedMajor == catalogMajor;
+        }
+
         return false;
+    }
+
+    /// <summary>Extracts the major version number from a dotted version string.</summary>
+    private static int? GetMajorVersion(string version)
+    {
+        var dotIdx = version.IndexOf('.');
+        var majorSpan = dotIdx > 0 ? version.AsSpan(0, dotIdx) : version.AsSpan();
+
+        if (int.TryParse(majorSpan, out var major))
+        {
+            return major;
+        }
+
+        return null;
     }
 
     private async Task<(Dictionary<string, string> Casks, Dictionary<string, string> Formulas, Dictionary<string, string> Descriptions)> LoadBrewInstalledAsync(CancellationToken cancellationToken)

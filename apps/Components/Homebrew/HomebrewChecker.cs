@@ -1,6 +1,6 @@
+using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 using apps.Infrastructure;
 using apps.Checkers;
@@ -83,8 +83,15 @@ public sealed class HomebrewFormulaChecker(IProcessRunner runner, ILogger<Homebr
 /// Reuses the same <c>brew outdated --json=v2</c> subprocess result as
 /// <see cref="HomebrewFormulaChecker"/> via a short-lived static cache,
 /// avoiding a duplicate subprocess when both checkers run concurrently.
+///
+/// For apps matched via the Homebrew catalog (not installed through Homebrew),
+/// fetches the latest version from <c>https://formulae.brew.sh/api/cask/{token}.json</c>
+/// to avoid relying on potentially stale local Homebrew cache data.
 /// </summary>
-public sealed class HomebrewCaskChecker(IProcessRunner runner, ILogger<HomebrewCaskChecker> logger)
+public sealed class HomebrewCaskChecker(
+    IProcessRunner runner,
+    IHttpClientFactory httpClientFactory,
+    ILogger<HomebrewCaskChecker> logger)
     : IUpdateChecker
 {
     /// <inheritdoc/>
@@ -110,7 +117,8 @@ public sealed class HomebrewCaskChecker(IProcessRunner runner, ILogger<HomebrewC
     public async Task<IReadOnlyList<UpdateCheckResult>> CheckBatchAsync(IReadOnlyList<AppRecord> apps, CancellationToken cancellationToken = default)
     {
         var (lookup, error) = await HomebrewOutdated.RunAsync(runner, logger, cancellationToken).ConfigureAwait(false);
-        return apps.Select(app => BuildResult(app, lookup, error)).ToArray();
+        var tasks = apps.Select(app => BuildResultAsync(app, lookup, error, cancellationToken));
+        return await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -122,11 +130,11 @@ public sealed class HomebrewCaskChecker(IProcessRunner runner, ILogger<HomebrewC
 
         foreach (var app in apps)
         {
-            yield return BuildResult(app, lookup, error);
+            yield return await BuildResultAsync(app, lookup, error, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private static UpdateCheckResult BuildResult(AppRecord app, HomebrewOutdated.Lookup lookup, string? error)
+    private async Task<UpdateCheckResult> BuildResultAsync(AppRecord app, HomebrewOutdated.Lookup lookup, string? error, CancellationToken cancellationToken)
     {
         if (error is not null)
         {
@@ -135,13 +143,9 @@ public sealed class HomebrewCaskChecker(IProcessRunner runner, ILogger<HomebrewC
 
         var detail = app.UpdateMethodDetail ?? app.Name;
 
-        // Apps matched via the Homebrew catalog but NOT installed through Homebrew carry a
-        // "catalog:{token}:{latestVersion}" detail. The version is compared directly against
-        // the installed version without relying on "brew outdated", which only covers
-        // Homebrew-managed installations.
         if (detail.StartsWith("catalog:", StringComparison.Ordinal))
         {
-            return BuildCatalogResult(app, detail);
+            return await BuildCatalogResultAsync(app, detail, cancellationToken).ConfigureAwait(false);
         }
 
         if (!lookup.Casks.TryGetValue(detail, out var latest))
@@ -153,15 +157,11 @@ public sealed class HomebrewCaskChecker(IProcessRunner runner, ILogger<HomebrewC
     }
 
     /// <summary>
-    /// Compares the installed version against the catalog version carried in <paramref name="detail"/>
-    /// (format: <c>"catalog:{token}:{rawVersion}"</c>).
-    /// The raw version may contain a comma-separated hash suffix (e.g. <c>"1.8555.2,abc123"</c>);
-    /// only the part before the first comma is used for comparison.
+    /// Fetches the latest cask version from the Homebrew Formulae API for catalog-matched apps.
+    /// Falls back to the version embedded in <paramref name="detail"/> if the API call fails.
     /// </summary>
-    private static UpdateCheckResult BuildCatalogResult(AppRecord app, string detail)
+    private async Task<UpdateCheckResult> BuildCatalogResultAsync(AppRecord app, string detail, CancellationToken cancellationToken)
     {
-        // detail = "catalog:{token}:{rawVersion}"
-        // Find the second colon (after "catalog:") to split off the version.
         var secondColon = detail.IndexOf(':', "catalog:".Length);
 
         if (secondColon < 0)
@@ -169,19 +169,43 @@ public sealed class HomebrewCaskChecker(IProcessRunner runner, ILogger<HomebrewC
             return new UpdateCheckResult(app.Name, UpdateMethod.HomebrewCask, false, app.InstalledVersion, app.InstalledVersion);
         }
 
-        var rawVersion = detail[(secondColon + 1)..];
+        var token = detail["catalog:".Length..secondColon];
+        var fallbackVersion = detail[(secondColon + 1)..];
 
-        // Strip any hash suffix that Homebrew appends after a comma.
-        var commaIdx = rawVersion.IndexOf(',');
-        var catalogVersion = (commaIdx >= 0 ? rawVersion[..commaIdx] : rawVersion).Trim();
+        var catalogVersion = await FetchCaskVersionAsync(token, cancellationToken).ConfigureAwait(false) ?? fallbackVersion;
 
-        if (string.IsNullOrWhiteSpace(catalogVersion))
+        var commaIdx = catalogVersion.IndexOf(',');
+        var cleanVersion = (commaIdx >= 0 ? catalogVersion[..commaIdx] : catalogVersion).Trim();
+
+        if (string.IsNullOrWhiteSpace(cleanVersion))
         {
             return new UpdateCheckResult(app.Name, UpdateMethod.HomebrewCask, false, app.InstalledVersion, app.InstalledVersion);
         }
 
-        var updateAvailable = VersionComparer.IsNewer(app.InstalledVersion, catalogVersion);
-        return new UpdateCheckResult(app.Name, UpdateMethod.HomebrewCask, updateAvailable, app.InstalledVersion, catalogVersion);
+        var updateAvailable = VersionComparer.IsNewer(app.InstalledVersion, cleanVersion);
+        return new UpdateCheckResult(app.Name, UpdateMethod.HomebrewCask, updateAvailable, app.InstalledVersion, cleanVersion);
+    }
+
+    /// <summary>
+    /// Queries <c>https://formulae.brew.sh/api/cask/{token}.json</c> for the latest version.
+    /// Returns <c>null</c> on any failure (network, 404, parse error).
+    /// </summary>
+    private async Task<string?> FetchCaskVersionAsync(string token, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = httpClientFactory.CreateClient("homebrew-api");
+            var response = await client
+                .GetFromJsonAsync($"/api/cask/{token}.json", HomebrewJsonContext.Default.BrewCaskApiResponse, cancellationToken)
+                .ConfigureAwait(false);
+
+            return response?.Version;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Failed to fetch cask version from Homebrew API for '{Token}'", token);
+            return null;
+        }
     }
 
     private static UpdateCheckResult Err(AppRecord app, string msg)

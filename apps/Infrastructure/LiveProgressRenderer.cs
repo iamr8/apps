@@ -923,7 +923,7 @@ public sealed class LiveProgressRenderer(
         return app.UpdateMethod switch
         {
             UpdateMethod.AppStore when detail is not null => $"mas upgrade {detail}",
-            UpdateMethod.HomebrewCask when detail is not null => $"brew upgrade --cask {detail}",
+            UpdateMethod.HomebrewCask when detail is not null => $"brew upgrade --cask {ExtractCaskToken(detail)}",
             UpdateMethod.HomebrewFormula when detail is not null => $"brew upgrade {detail}",
             UpdateMethod.MacPorts when detail is not null => $"sudo port upgrade {detail}",
             UpdateMethod.Chocolatey when detail is not null => $"choco upgrade {detail}",
@@ -953,5 +953,21 @@ public sealed class LiveProgressRenderer(
             "GoTools" => $"go install {detail}@latest",
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Extracts the cask token from the detail string.
+    /// Catalog-matched entries use format <c>"catalog:{token}:{version}"</c>; returns just the token.
+    /// </summary>
+    private static string ExtractCaskToken(string detail)
+    {
+        if (!detail.StartsWith("catalog:", StringComparison.Ordinal))
+        {
+            return detail;
+        }
+
+        var afterPrefix = detail.AsSpan("catalog:".Length);
+        var colonIdx = afterPrefix.IndexOf(':');
+        return colonIdx > 0 ? afterPrefix[..colonIdx].ToString() : afterPrefix.ToString();
     }
 }
