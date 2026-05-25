@@ -53,7 +53,7 @@ jobs:
           tar -czf ../apps-${{ matrix.rid }}.tar.gz apps
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apps-${{ matrix.rid }}
           path: apps-${{ matrix.rid }}.tar.gz
@@ -96,7 +96,7 @@ jobs:
           echo "" >> release-notes.md
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
