@@ -9,7 +9,7 @@ namespace apps.Components.Chocolatey;
 public static class ChocolateyRegistration
 {
     /// <summary>Adds the Chocolatey scanner and outdated-check checker.</summary>
-    public static IServiceCollection AddChocolateyPlatform(this IServiceCollection services)
+    public static IServiceCollection AddChocolatey(this IServiceCollection services)
     {
         services.AddSingleton<IScanner, ChocoScanner>();
         services.AddSingleton<IUpdateChecker, ChocoChecker>();

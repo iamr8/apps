@@ -10,7 +10,7 @@ namespace apps.Components.Homebrew;
 public static class HomebrewRegistration
 {
     /// <summary>Adds the Homebrew scanner and both cask/formula checkers.</summary>
-    public static IServiceCollection AddHomebrewPlatform(this IServiceCollection services)
+    public static IServiceCollection AddHomebrew(this IServiceCollection services)
     {
         services.AddCheckerClient("homebrew-api", "https://formulae.brew.sh", 4);
 

@@ -29,22 +29,22 @@ public static class ComponentRegistration
     /// <summary>Registers all component scanners, checkers, and HTTP clients.</summary>
     public static IServiceCollection AddAllComponents(this IServiceCollection services)
     {
-        services.AddDotnetPlatform();
-        services.AddNodePlatform();
-        services.AddGoPlatform();
-        services.AddHomebrewPlatform();
-        services.AddAppStorePlatform();
-        services.AddMacPortsPlatform();
-        services.AddChocolateyPlatform();
-        services.AddDockerPlatform();
-        services.AddVsCodePlatform();
-        services.AddJetBrainsPlatform();
-        services.AddGitHubPlatform();
-        services.AddSparklePlatform();
-        services.AddElectronPlatform();
-        services.AddMacOsPlatform();
-        services.AddSwiftPlatform();
-        services.AddVcpkgPlatform();
+        services.AddDotnet();
+        services.AddNode();
+        services.AddGo();
+        services.AddHomebrew();
+        services.AddAppStore();
+        services.AddMacPorts();
+        services.AddChocolatey();
+        services.AddDocker();
+        services.AddVsCode();
+        services.AddJetBrains();
+        services.AddGitHub();
+        services.AddSparkle();
+        services.AddElectron();
+        services.AddMacOs();
+        services.AddSwift();
+        services.AddVcpkg();
         return services;
     }
 }

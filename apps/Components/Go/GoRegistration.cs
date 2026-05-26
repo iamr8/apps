@@ -10,7 +10,7 @@ namespace apps.Components.Go;
 public static class GoRegistration
 {
     /// <summary>Adds Go runtime scanner, Go tools scanner, Go module scanner, and Go proxy checker.</summary>
-    public static IServiceCollection AddGoPlatform(this IServiceCollection services)
+    public static IServiceCollection AddGo(this IServiceCollection services)
     {
         services.AddCheckerClient("goproxy", "https://proxy.golang.org", 24);
 

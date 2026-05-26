@@ -10,7 +10,7 @@ namespace apps.Components.AppStore;
 public static class AppStoreRegistration
 {
     /// <summary>Adds the App Store scanner and iTunes lookup checker.</summary>
-    public static IServiceCollection AddAppStorePlatform(this IServiceCollection services)
+    public static IServiceCollection AddAppStore(this IServiceCollection services)
     {
         services.AddCheckerClient("itunes", "https://itunes.apple.com", 6);
 

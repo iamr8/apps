@@ -10,7 +10,7 @@ namespace apps.Components.Electron;
 public static class ElectronRegistration
 {
     /// <summary>Adds the Electron app-update.yml scanner, update checker, and generic feed HTTP client.</summary>
-    public static IServiceCollection AddElectronPlatform(this IServiceCollection services)
+    public static IServiceCollection AddElectron(this IServiceCollection services)
     {
         services.AddCheckerClient("electron-generic", "https://placeholder.invalid", 4);
 

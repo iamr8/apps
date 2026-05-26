@@ -9,7 +9,7 @@ namespace apps.Components.GitHub;
 public static class GitHubRegistration
 {
     /// <summary>Adds the GitHub Releases checker and its authenticated HTTP client.</summary>
-    public static IServiceCollection AddGitHubPlatform(this IServiceCollection services)
+    public static IServiceCollection AddGitHub(this IServiceCollection services)
     {
         services.AddCheckerClient("github", "https://api.github.com", 10, c =>
         {

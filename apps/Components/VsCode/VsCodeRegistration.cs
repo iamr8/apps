@@ -10,7 +10,7 @@ namespace apps.Components.VsCode;
 public static class VsCodeRegistration
 {
     /// <summary>Adds the VS Code extension scanner and marketplace checker.</summary>
-    public static IServiceCollection AddVsCodePlatform(this IServiceCollection services)
+    public static IServiceCollection AddVsCode(this IServiceCollection services)
     {
         services.AddCheckerClient("vscode", "https://marketplace.visualstudio.com", 2);
 

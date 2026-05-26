@@ -8,7 +8,7 @@ namespace apps.Components.Vcpkg;
 public static class VcpkgRegistration
 {
     /// <summary>Adds the vcpkg.json scanner.</summary>
-    public static IServiceCollection AddVcpkgPlatform(this IServiceCollection services)
+    public static IServiceCollection AddVcpkg(this IServiceCollection services)
     {
         services.AddSingleton<IProjectLevelScanner, VcpkgScanner>();
         return services;

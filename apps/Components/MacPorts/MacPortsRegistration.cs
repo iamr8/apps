@@ -9,7 +9,7 @@ namespace apps.Components.MacPorts;
 public static class MacPortsRegistration
 {
     /// <summary>Adds the MacPorts scanner and outdated-check checker.</summary>
-    public static IServiceCollection AddMacPortsPlatform(this IServiceCollection services)
+    public static IServiceCollection AddMacPorts(this IServiceCollection services)
     {
         services.AddSingleton<IScanner, MacPortsScanner>();
         services.AddSingleton<IUpdateChecker, MacPortsChecker>();

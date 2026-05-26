@@ -10,7 +10,7 @@ namespace apps.Components.Docker;
 public static class DockerRegistration
 {
     /// <summary>Adds the Docker image scanner and Docker Hub tag checker.</summary>
-    public static IServiceCollection AddDockerPlatform(this IServiceCollection services)
+    public static IServiceCollection AddDocker(this IServiceCollection services)
     {
         services.AddCheckerClient("dockerhub", "https://hub.docker.com", 6);
 

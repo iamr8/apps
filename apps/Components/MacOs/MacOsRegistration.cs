@@ -9,7 +9,7 @@ namespace apps.Components.MacOs;
 public static class MacOsRegistration
 {
     /// <summary>Adds all macOS-native scanners and the Software Update checker.</summary>
-    public static IServiceCollection AddMacOsPlatform(this IServiceCollection services)
+    public static IServiceCollection AddMacOs(this IServiceCollection services)
     {
         services.AddSingleton<IScanner, ApplicationsScanner>();
         services.AddSingleton<IScanner, MacOsUpdateScanner>();

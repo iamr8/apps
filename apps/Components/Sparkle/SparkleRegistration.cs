@@ -9,7 +9,7 @@ namespace apps.Components.Sparkle;
 public static class SparkleRegistration
 {
     /// <summary>Adds the Sparkle appcast checker and its HTTP client.</summary>
-    public static IServiceCollection AddSparklePlatform(this IServiceCollection services)
+    public static IServiceCollection AddSparkle(this IServiceCollection services)
     {
         services.AddCheckerClient("sparkle", "https://example.com", 8, c =>
             c.DefaultRequestHeaders.UserAgent.ParseAdd("Sparkle/2.0"));

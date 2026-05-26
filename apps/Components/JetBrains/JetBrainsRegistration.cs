@@ -10,7 +10,7 @@ namespace apps.Components.JetBrains;
 public static class JetBrainsRegistration
 {
     /// <summary>Adds the JetBrains plugin scanner and plugin repository checker.</summary>
-    public static IServiceCollection AddJetBrainsPlatform(this IServiceCollection services)
+    public static IServiceCollection AddJetBrains(this IServiceCollection services)
     {
         services.AddCheckerClient("jetbrains", "https://plugins.jetbrains.com", 4);
 
