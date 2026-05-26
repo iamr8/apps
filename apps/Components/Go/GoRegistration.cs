@@ -15,8 +15,6 @@ public static class GoRegistration
         services.AddCheckerClient("goproxy", "https://proxy.golang.org", 24);
 
         services.AddSingleton<IScanner, GoScanner>();
-        services.AddSingleton<IScanner, GoToolsScanner>();
-        services.AddSingleton<IProjectLevelScanner, GoModScanner>();
         services.AddSingleton<IUpdateChecker, GoModProxyChecker>();
         return services;
     }

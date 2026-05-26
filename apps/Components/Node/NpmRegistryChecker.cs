@@ -43,7 +43,7 @@ public sealed class NpmRegistryChecker(IHttpClientFactory httpClientFactory, ILo
     /// <inheritdoc/>
     public bool CanCheck(AppRecord app)
         => app.UpdateMethod == UpdateMethod.PackageRegistry
-           && NpmScanners.Contains(app.Scanner);
+           && NpmScanners.Contains(app.Identifier.Name);
 
     /// <inheritdoc/>
     public async Task<UpdateCheckResult> CheckAsync(AppRecord app, CancellationToken cancellationToken = default)

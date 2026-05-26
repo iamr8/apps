@@ -8,9 +8,9 @@ namespace apps.Components.Swift;
 public static class SwiftRegistration
 {
     /// <summary>Adds the Swift Package.swift scanner.</summary>
-    public static IServiceCollection AddSwiftPlatform(this IServiceCollection services)
+    public static IServiceCollection AddSwift(this IServiceCollection services)
     {
-        services.AddSingleton<IProjectLevelScanner, SwiftPackageScanner>();
+        services.AddSingleton<IScanner, SwiftPackageScanner>();
         return services;
     }
 }

@@ -32,8 +32,8 @@ public sealed class DotnetReleasesChecker(IHttpClientFactory httpClientFactory, 
     /// <inheritdoc/>
     public bool CanCheck(AppRecord app)
         => app.UpdateMethod == UpdateMethod.Sdk
-           && (string.Equals(app.Scanner, "Dotnet", StringComparison.Ordinal)
-               || string.Equals(app.Scanner, "DotnetRuntime", StringComparison.Ordinal));
+           && (string.Equals(app.Identifier.Name, "Dotnet", StringComparison.Ordinal)
+               || string.Equals(app.Identifier.Name, "DotnetRuntime", StringComparison.Ordinal));
 
     /// <inheritdoc/>
     public async Task<UpdateCheckResult> CheckAsync(AppRecord app, CancellationToken cancellationToken = default)

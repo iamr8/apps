@@ -15,20 +15,31 @@ namespace apps.Components.MacOs;
 public sealed class MacOsUpdateScanner(IProcessRunner runner)
     : IScanner
 {
+    private string? _executablePath;
+
     public string Name => "macOS";
 
     /// <inheritdoc/>
     public string DisplayName => "macOS";
 
+    public OS SupportedOS => OS.MacOS;
+
     /// <summary>Always available on macOS.</summary>
     public bool IsAvailable()
     {
-        return File.Exists("/usr/sbin/softwareupdate");
+        const string path = "/usr/sbin/softwareupdate";
+        if (File.Exists(path))
+        {
+            _executablePath = path;
+            return true;
+        }
+
+        return false;
     }
 
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var result = await runner.RunAsync("/usr/sbin/softwareupdate", "--list --all", cancellationToken);
+        var result = await runner.RunAsync(_executablePath!, "--list --all", cancellationToken);
 
         // softwareupdate exits 1 when there are no updates — not an error.
         var output = result.StandardOutput + result.StandardError;
@@ -71,11 +82,11 @@ public sealed class MacOsUpdateScanner(IProcessRunner runner)
     }
 
 
-    private static DiscoveredApp MakeEntry(string label, string? version)
+    private DiscoveredApp MakeEntry(string label, string? version)
     {
         return new DiscoveredApp(
             label,
-            "macOS",
+            new AppIdentifier(Name, DisplayName),
             AppKind.Packages,
             null, // softwareupdate doesn't report installed version
             SuggestedMethod: UpdateMethod.Specialised,

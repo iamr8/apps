@@ -14,12 +14,14 @@ namespace apps.Components.Vcpkg;
 /// Opt-in via <c>--include-project-deps</c>.
 /// </summary>
 public sealed class VcpkgScanner(ProjectManifestFinder finder, ILogger<VcpkgScanner> logger)
-    : IProjectLevelScanner
+    : IScanner
 {
     public string Name => "vcpkg";
 
     /// <inheritdoc/>
     public string DisplayName => "vcpkg";
+
+    public OS SupportedOS => OS.MacOS | OS.Windows;
 
     public bool IsAvailable()
     {
@@ -104,7 +106,7 @@ public sealed class VcpkgScanner(ProjectManifestFinder finder, ILogger<VcpkgScan
 
                 yield return new DiscoveredApp(
                     name,
-                    Name,
+                    new AppIdentifier(Name, DisplayName),
                     AppKind.Libraries,
                     version,
                     ProjectFile: manifestPath,

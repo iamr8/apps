@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 
@@ -18,32 +19,32 @@ namespace apps.Components.Homebrew;
 public sealed class HomebrewScanner(IProcessRunner runner, ILogger<HomebrewScanner> logger)
     : IScanner
 {
+    private string? _executablePath;
+
     public string Name => "Homebrew";
 
     /// <inheritdoc/>
     public string DisplayName => "Homebrew";
 
-    private static readonly string[] BrewCandidates =
-    [
-        "/opt/homebrew/bin/brew",
-        "/usr/local/bin/brew"
-    ];
+    public OS SupportedOS => OS.MacOS;
 
-    /// <inheritdoc/>
     public bool IsAvailable()
     {
-        return FindBrew() is not null;
+        string[] candidates =
+        [
+            "/opt/homebrew/bin/brew",
+            "/usr/local/bin/brew"
+        ];
+        _executablePath = candidates.FirstOrDefault(File.Exists);
+        return _executablePath is not null;
     }
 
-    /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var brew = FindBrew()!;
-
         // Run all three commands concurrently — descriptions are a bonus and failures are non-fatal.
-        var formulaTask = runner.RunAsync(brew, "list --versions", cancellationToken);
-        var caskTask = runner.RunAsync(brew, "list --cask --versions", cancellationToken);
-        var infoTask = runner.RunAsync(brew, "info --json=v2 --installed", cancellationToken);
+        var formulaTask = runner.RunAsync(_executablePath!, "list --versions", cancellationToken);
+        var caskTask = runner.RunAsync(_executablePath!, "list --cask --versions", cancellationToken);
+        var infoTask = runner.RunAsync(_executablePath!, "info --json=v2 --installed", cancellationToken);
 
         var formulaResult = await formulaTask.ConfigureAwait(false);
         var caskResult = await caskTask.ConfigureAwait(false);
@@ -119,7 +120,7 @@ public sealed class HomebrewScanner(IProcessRunner runner, ILogger<HomebrewScann
 
         return new DiscoveredApp(
             name,
-            Name,
+            new AppIdentifier(Name, DisplayName, "Formula"),
             AppKind.Packages,
             version,
             SuggestedMethod: UpdateMethod.HomebrewFormula,
@@ -150,7 +151,7 @@ public sealed class HomebrewScanner(IProcessRunner runner, ILogger<HomebrewScann
 
         return new DiscoveredApp(
             displayName ?? token,
-            Name,
+            new AppIdentifier(Name, DisplayName, "Cask"),
             AppKind.App,
             version,
             SuggestedMethod: UpdateMethod.HomebrewCask,
@@ -223,10 +224,4 @@ public sealed class HomebrewScanner(IProcessRunner runner, ILogger<HomebrewScann
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(l => !string.IsNullOrWhiteSpace(l));
     }
-
-    private static string? FindBrew()
-    {
-        return BrewCandidates.FirstOrDefault(File.Exists);
-    }
 }
-

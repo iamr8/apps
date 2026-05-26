@@ -35,7 +35,7 @@ public sealed class JetBrainsPluginChecker(IHttpClientFactory httpClientFactory,
     /// <inheritdoc/>
     public bool CanCheck(AppRecord app)
         => app.UpdateMethod == UpdateMethod.Specialised
-           && string.Equals(app.Scanner, "JetBrains", StringComparison.Ordinal)
+           && string.Equals(app.Identifier.Name, "JetBrains", StringComparison.Ordinal)
            && app.UpdateMethodDetail is not null;
 
     /// <inheritdoc/>

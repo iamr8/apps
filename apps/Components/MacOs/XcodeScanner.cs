@@ -16,6 +16,8 @@ namespace apps.Components.MacOs;
 public sealed class XcodeScanner(IProcessRunner runner, ILogger<XcodeScanner> logger)
     : IScanner
 {
+    private string? _executablePath;
+    
     private const string XcodeBundleId = "com.apple.dt.Xcode";
 
     public string Name => "Xcode";
@@ -23,15 +25,17 @@ public sealed class XcodeScanner(IProcessRunner runner, ILogger<XcodeScanner> lo
     /// <inheritdoc/>
     public string DisplayName => "Xcode";
 
+    public OS SupportedOS => OS.MacOS;
+
     public bool IsAvailable()
     {
-        return ScannerHelper.IsExecutableAvailable("xcodebuild");
+        _executablePath = ScannerHelper.FindExecutable("xcodebuild");
+        return _executablePath is not null;
     }
 
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var xcodebuild = ScannerHelper.FindExecutable("xcodebuild") ?? "xcodebuild";
-        var result = await runner.RunAsync(xcodebuild, "-version", cancellationToken);
+        var result = await runner.RunAsync(_executablePath!, "-version", cancellationToken);
         if (!result.Success)
         {
             logger.LogWarning("'xcodebuild -version' failed: {Err}", result.StandardError.Trim());
@@ -51,7 +55,7 @@ public sealed class XcodeScanner(IProcessRunner runner, ILogger<XcodeScanner> lo
 
         yield return new DiscoveredApp(
             "Xcode",
-            Name,
+            new AppIdentifier(Name, DisplayName),
             AppKind.Packages,
             version,
             xcodePath,

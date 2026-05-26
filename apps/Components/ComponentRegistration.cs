@@ -1,5 +1,6 @@
 using apps.Components.AppStore;
 using apps.Components.Chocolatey;
+using apps.Components.Chrome;
 using apps.Components.Docker;
 using apps.Components.Dotnet;
 using apps.Components.Electron;
@@ -14,6 +15,7 @@ using apps.Components.Sparkle;
 using apps.Components.Swift;
 using apps.Components.Vcpkg;
 using apps.Components.VsCode;
+using apps.Components.Windows;
 
 using Microsoft.Extensions.DependencyInjection;
 
@@ -43,8 +45,10 @@ public static class ComponentRegistration
         services.AddSparkle();
         services.AddElectron();
         services.AddMacOs();
+        services.AddWindows();
         services.AddSwift();
         services.AddVcpkg();
+        services.AddChrome();
         return services;
     }
 }

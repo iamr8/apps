@@ -10,7 +10,7 @@ public static class VcpkgRegistration
     /// <summary>Adds the vcpkg.json scanner.</summary>
     public static IServiceCollection AddVcpkg(this IServiceCollection services)
     {
-        services.AddSingleton<IProjectLevelScanner, VcpkgScanner>();
+        services.AddSingleton<IScanner, VcpkgScanner>();
         return services;
     }
 }

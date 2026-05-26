@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Xml;
@@ -19,41 +20,55 @@ namespace apps.Components.JetBrains;
 public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logger)
     : IScanner
 {
+    private string[] _executablePaths;
+
     public string Name => "JetBrains";
 
     /// <inheritdoc/>
     public string DisplayName => "JetBrains";
 
+    public OS SupportedOS => OS.MacOS | OS.Windows;
+
     /// <inheritdoc/>
     public string? GetSourceQualifier(AppKind kind) => kind == AppKind.Extension ? "Plugin" : null;
 
-    private static readonly string JetBrainsRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "JetBrains");
-
-    /// <inheritdoc/>
     public bool IsAvailable()
     {
-        return Directory.Exists(JetBrainsRoot);
+        var root = OperatingSystem.IsMacOS()
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "JetBrains")
+            : OperatingSystem.IsWindows()
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local", "JetBrains")
+                : null;
+        if (root is null)
+        {
+            return false;
+        }
+
+        if (!Directory.Exists(root))
+        {
+            return false;
+        }
+
+        try
+        {
+            _executablePaths = Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly);
+            return _executablePaths.Length > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Cannot list JetBrains product directories in {Root}", root);
+            return false;
+        }
     }
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        string[] productDirs;
-        try
-        {
-            productDirs = Directory.GetDirectories(JetBrainsRoot, "*", SearchOption.TopDirectoryOnly);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Cannot list JetBrains product directories in {Root}", JetBrainsRoot);
-            yield break;
-        }
-
         // Track seen plugin IDs across all product dirs to avoid duplicates
         // (same plugin installed in Rider 2024.1 and 2024.3 should appear once).
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var productDir in productDirs)
+        foreach (var productDir in _executablePaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -101,7 +116,7 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
     /// Attempts to read plugin metadata from a plugin directory.
     /// Tries <c>META-INF/plugin.xml</c> directly first, then scans <c>lib/*.jar</c>.
     /// </summary>
-    private static async Task<DiscoveredApp?> TryReadPluginAsync(string pluginDir, CancellationToken cancellationToken)
+    private async Task<DiscoveredApp?> TryReadPluginAsync(string pluginDir, CancellationToken cancellationToken)
     {
         // Case 1: extracted plugin — META-INF/plugin.xml on disk
         var xmlPath = Path.Combine(pluginDir, "META-INF", "plugin.xml");
@@ -130,7 +145,7 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
         return null;
     }
 
-    private static DiscoveredApp? TryReadPluginFromJar(string jarPath)
+    private DiscoveredApp? TryReadPluginFromJar(string jarPath)
     {
         try
         {
@@ -152,13 +167,13 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
         }
     }
 
-    private static async Task<DiscoveredApp?> ParsePluginXmlAsync(string xmlPath, string sourcePath, CancellationToken ct)
+    private async Task<DiscoveredApp?> ParsePluginXmlAsync(string xmlPath, string sourcePath, CancellationToken ct)
     {
         var xml = await File.ReadAllTextAsync(xmlPath, ct);
         return ParsePluginXmlString(xml, sourcePath);
     }
 
-    private static DiscoveredApp? ParsePluginXmlString(string xml, string sourcePath)
+    private DiscoveredApp? ParsePluginXmlString(string xml, string sourcePath)
     {
         var doc = new XmlDocument();
         doc.LoadXml(xml);
@@ -181,7 +196,7 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
 
         return new DiscoveredApp(
             name ?? displayId,
-            "JetBrains",
+            new AppIdentifier(Name, DisplayName, "Plugin"),
             AppKind.Extension,
             string.IsNullOrWhiteSpace(version) ? null : version,
             sourcePath,

@@ -43,7 +43,7 @@ public sealed class DockerHubChecker(IHttpClientFactory httpClientFactory, ILogg
     /// <inheritdoc/>
     public bool CanCheck(AppRecord app)
         => app.UpdateMethod == UpdateMethod.Specialised
-           && string.Equals(app.Scanner, "Docker", StringComparison.Ordinal)
+           && string.Equals(app.Identifier.Name, "Docker", StringComparison.Ordinal)
            && app.UpdateMethodDetail is not null;
 
     /// <inheritdoc/>

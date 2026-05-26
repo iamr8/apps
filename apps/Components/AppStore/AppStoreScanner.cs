@@ -17,20 +17,24 @@ namespace apps.Components.AppStore;
 public sealed class AppStoreScanner(IProcessRunner runner, ILogger<AppStoreScanner> logger)
     : IScanner
 {
+    private string? _executablePath;
+
     public string Name => "AppStore";
 
     /// <inheritdoc/>
     public string DisplayName => "App Store";
 
-    /// <summary><c>mas</c> must be installed for this scanner to function.</summary>
+    public OS SupportedOS => OS.MacOS;
+
     public bool IsAvailable()
     {
-        return ScannerHelper.IsExecutableAvailable("mas");
+        _executablePath = ScannerHelper.FindExecutable("mas");
+        return _executablePath is not null;
     }
 
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var result = await runner.RunAsync("mas", "list", cancellationToken);
+        var result = await runner.RunAsync(_executablePath!, "list", cancellationToken);
         if (!result.Success)
         {
             logger.LogWarning("'mas list' failed ({Code}): {Err}", result.ExitCode, result.StandardError.Trim());
@@ -47,7 +51,6 @@ public sealed class AppStoreScanner(IProcessRunner runner, ILogger<AppStoreScann
             }
         }
     }
-
 
     /// <summary>
     /// mas list format: "APPID   App Name With Spaces   1.2.3"
@@ -79,7 +82,7 @@ public sealed class AppStoreScanner(IProcessRunner runner, ILogger<AppStoreScann
 
         return new DiscoveredApp(
             name,
-            Name,
+            new AppIdentifier(Name, DisplayName, "Application"),
             AppKind.App,
             version,
             SuggestedMethod: UpdateMethod.AppStore,

@@ -15,15 +15,13 @@ namespace apps.Infrastructure;
 /// </summary>
 public sealed class LiveProgressRenderer(
     IEnumerable<IUpdateChecker> checkers,
-    IEnumerable<IScanner> scanners,
-    IEnumerable<IProjectLevelScanner> projectLevelScanners)
+    IEnumerable<IScanner> scanners)
 {
     private readonly Lock _lock = new();
     private readonly IReadOnlyList<IUpdateChecker> _checkers = checkers.ToArray();
 
     private readonly IReadOnlyDictionary<string, IScanner> _scanners =
         scanners
-            .Concat(projectLevelScanners)
             .DistinctBy(s => s.Name, StringComparer.Ordinal)
             .ToDictionary(s => s.Name, StringComparer.Ordinal);
 
@@ -728,14 +726,7 @@ public sealed class LiveProgressRenderer(
     {
         // 1. Scanner-owned qualifier always wins (handles Docker, NuGet, VS Code extensions,
         //    Safari/Chrome extensions, etc. — without needing to match on raw scanner name strings).
-        if (_scanners.TryGetValue(app.Scanner, out var scanner))
-        {
-            var scannerQualifier = scanner.GetSourceQualifier(app.Kind);
-            if (scannerQualifier is not null)
-            {
-                return (ScanLabel(app.Scanner), scannerQualifier);
-            }
-        }
+        return (app.Identifier.DisplayName, app.Identifier.Qualifier);
 
         // 2. Special method cases with no checker representation.
         if (app.UpdateMethod == UpdateMethod.None) return (Dash, null);
@@ -754,7 +745,7 @@ public sealed class LiveProgressRenderer(
         }
 
         // 4. Fallback: scanner display name, no qualifier (PackageRegistry, Sdk, Specialised checkers).
-        return (ScanLabel(app.Scanner), null);
+        return (app.Identifier.DisplayName, null);
     }
 
     /// <summary>
@@ -817,7 +808,7 @@ public sealed class LiveProgressRenderer(
     /// </summary>
     private string GetDisplayName(AppRecord app)
     {
-        if (_scanners.TryGetValue(app.Scanner, out var scanner)
+        if (_scanners.TryGetValue(app.Identifier.Name, out var scanner)
             && scanner.StripTagFromDisplayName
             && app.Name is { } rawName)
         {
@@ -923,13 +914,13 @@ public sealed class LiveProgressRenderer(
         return app.UpdateMethod switch
         {
             UpdateMethod.AppStore when detail is not null => $"mas upgrade {detail}",
-            UpdateMethod.HomebrewCask when detail is not null && app.Scanner == "Homebrew" => $"brew upgrade --cask {ExtractCaskToken(detail)}",
-            UpdateMethod.HomebrewFormula when detail is not null && app.Scanner == "Homebrew" => $"brew upgrade {detail}",
+            UpdateMethod.HomebrewCask when detail is not null && app.Identifier.Name == "Homebrew" => $"brew upgrade --cask {ExtractCaskToken(detail)}",
+            UpdateMethod.HomebrewFormula when detail is not null && app.Identifier.Name == "Homebrew" => $"brew upgrade {detail}",
             UpdateMethod.MacPorts when detail is not null => $"sudo port upgrade {detail}",
             UpdateMethod.Chocolatey when detail is not null => $"choco upgrade {detail}",
             UpdateMethod.PackageRegistry => GetRegistryUpdateCommand(app),
-            UpdateMethod.Specialised when app.Scanner == "Docker" && detail is not null => $"docker pull {detail}",
-            UpdateMethod.Sdk when app.Scanner is "Dotnet" or "DotnetRuntime" => null,
+            UpdateMethod.Specialised when app.Identifier.Name == "Docker" && detail is not null => $"docker pull {detail}",
+            UpdateMethod.Sdk when app.Identifier.Name is "Dotnet" or "DotnetRuntime" => null,
             _ => null
         };
     }
@@ -945,7 +936,7 @@ public sealed class LiveProgressRenderer(
             return null;
         }
 
-        return app.Scanner switch
+        return app.Identifier.Name switch
         {
             "NuGet" => $"dotnet tool update -g {detail}",
             "NugetLocalTools" => $"dotnet tool update {detail}",

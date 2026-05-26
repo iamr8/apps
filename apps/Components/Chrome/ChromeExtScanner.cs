@@ -7,7 +7,7 @@ using apps.Scanners;
 
 using Microsoft.Extensions.Logging;
 
-namespace apps.Components.MacOs;
+namespace apps.Components.Chrome;
 
 /// <summary>
 /// Discovers Google Chrome (and Chrome Canary) extensions by reading each profile's
@@ -20,49 +20,52 @@ namespace apps.Components.MacOs;
 public sealed class ChromeExtScanner(ILogger<ChromeExtScanner> logger)
     : IScanner
 {
+    private string? _executablePath;
+
     public string Name => "ChromeExt";
 
     /// <inheritdoc/>
     public string DisplayName => "Chrome";
 
+    public OS SupportedOS => OS.MacOS | OS.Windows;
+
     /// <inheritdoc/>
     /// <remarks>All apps from this scanner are extensions; the qualifier is always "Extension".</remarks>
     public string? GetSourceQualifier(AppKind kind) => "Extension";
 
-    private static readonly string ChromeBase = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        "Library", "Application Support", "Google", "Chrome");
+    public bool IsAvailable()
+    {
+        var chrome = OperatingSystem.IsMacOS()
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "Google", "Chrome")
+            : OperatingSystem.IsWindows()
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local", "Google", "Chrome")
+                : null;
+        if (chrome is null)
+        {
+            return false;
+        }
 
-    private static readonly string ChromeCanaryBase = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        "Library", "Application Support", "Google", "Chrome Canary");
+        if (Directory.Exists(chrome))
+        {
+            _executablePath = chrome;
+            return true;
+        }
 
-    /// <inheritdoc/>
-    public bool IsAvailable() => Directory.Exists(ChromeBase) || Directory.Exists(ChromeCanaryBase);
+        return false;
+    }
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var chromeRoot in new[] { ChromeBase, ChromeCanaryBase })
+        await foreach (var app in ScanChromeRootAsync(_executablePath!, seen, cancellationToken).ConfigureAwait(false))
         {
-            if (!Directory.Exists(chromeRoot))
-            {
-                continue;
-            }
-
-            await foreach (var app in ScanChromeRootAsync(chromeRoot, seen, cancellationToken).ConfigureAwait(false))
-            {
-                yield return app;
-            }
+            yield return app;
         }
     }
 
-    private async IAsyncEnumerable<DiscoveredApp> ScanChromeRootAsync(
-        string chromeRoot,
-        HashSet<string> seen,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<DiscoveredApp> ScanChromeRootAsync(string chromeRoot, HashSet<string> seen, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         foreach (var profileDir in EnumerateProfileDirs(chromeRoot))
         {
@@ -144,7 +147,7 @@ public sealed class ChromeExtScanner(ILogger<ChromeExtScanner> logger)
 
         return new DiscoveredApp(
             name,
-            Name,
+            new AppIdentifier(Name, DisplayName, "Extension"),
             AppKind.Extension,
             version,
             versionDir,
@@ -153,7 +156,7 @@ public sealed class ChromeExtScanner(ILogger<ChromeExtScanner> logger)
             Description: string.IsNullOrWhiteSpace(description) ? null : description);
     }
 
-    private IEnumerable<string> EnumerateProfileDirs(string chromeRoot)
+    private List<string> EnumerateProfileDirs(string chromeRoot)
     {
         var profiles = new List<string>();
 
@@ -179,7 +182,7 @@ public sealed class ChromeExtScanner(ILogger<ChromeExtScanner> logger)
     {
         try
         {
-            return Directory.EnumerateDirectories(path).ToArray();
+            return Directory.EnumerateDirectories(path);
         }
         catch (Exception ex)
         {
@@ -203,4 +206,3 @@ internal sealed class ChromeManifest
 
 [JsonSerializable(typeof(ChromeManifest))]
 internal sealed partial class ChromeJsonContext : JsonSerializerContext;
-

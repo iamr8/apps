@@ -210,7 +210,7 @@ public sealed class Orchestrator(
                 InstalledVersion = winner.InstalledVersion,
                 InstalledBuildVersion = winner.InstalledBuildVersion,
                 Path = winner.Path,
-                Scanner = winner.Scanner,
+                Identifier = winner.Identifier,
                 Kind = winner.Kind,
                 UpdateMethod = winner.UpdateMethod,
                 UpdateMethodDetail = winner.UpdateMethodDetail,

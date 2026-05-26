@@ -16,8 +16,7 @@ public static class NodeRegistration
             c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.npm.install-v1+json"));
 
         services.AddSingleton<IScanner, NodeScanner>();
-        services.AddSingleton<IScanner, NpmGlobalScanner>();
-        services.AddSingleton<IProjectLevelScanner, NpmProjectScanner>();
+        services.AddSingleton<IScanner, NpmScanner>();
         services.AddSingleton<IUpdateChecker, NpmRegistryChecker>();
         return services;
     }

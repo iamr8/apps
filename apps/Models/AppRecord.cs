@@ -18,7 +18,7 @@ public sealed class AppRecord
     /// </summary>
     public string? InstalledBuildVersion { get; set; }
     public string? Path { get; init; }
-    public required string Scanner { get; init; }
+    public required AppIdentifier Identifier { get; init; }
 
     /// <summary>app | devtool | package | dep | service</summary>
     public AppKind Kind { get; init; }
@@ -79,7 +79,7 @@ public sealed class AppRecord
         InstalledVersion = app.InstalledVersion,
         InstalledBuildVersion = app.InstalledBuildVersion,
         Path = app.Path,
-        Scanner = app.Scanner,
+        Identifier = app.Identifier,
         Kind = app.Kind,
         UpdateMethod = app.SuggestedMethod,
         UpdateMethodDetail = app.SuggestedMethodDetail,

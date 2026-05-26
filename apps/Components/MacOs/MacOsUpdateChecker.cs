@@ -31,7 +31,7 @@ public sealed class MacOsUpdateChecker(IProcessRunner runner, ILogger<MacOsUpdat
     /// <inheritdoc/>
     public bool CanCheck(AppRecord app)
         => app.UpdateMethod == UpdateMethod.Specialised
-           && string.Equals(app.Scanner, "macOS", StringComparison.Ordinal);
+           && string.Equals(app.Identifier.Name, "macOS", StringComparison.Ordinal);
 
     /// <inheritdoc/>
     public async Task<UpdateCheckResult> CheckAsync(AppRecord app, CancellationToken cancellationToken = default)

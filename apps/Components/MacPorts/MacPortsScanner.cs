@@ -15,10 +15,14 @@ namespace apps.Components.MacPorts;
 public sealed class MacPortsScanner(IProcessRunner runner, ILogger<MacPortsScanner> logger)
     : IScanner
 {
+    private string? _executablePath;
+
     public string Name => "MacPorts";
 
     /// <inheritdoc/>
     public string DisplayName => "MacPorts";
+
+    public OS SupportedOS => OS.MacOS;
 
     public bool IsAvailable()
     {
@@ -46,7 +50,13 @@ public sealed class MacPortsScanner(IProcessRunner runner, ILogger<MacPortsScann
             };
             probe.Start();
             var exited = probe.WaitForExit(3_000);
-            return exited && probe.ExitCode == 0;
+            if (exited && probe.ExitCode == 0)
+            {
+                _executablePath = exe;
+                return true;
+            }
+
+            return false;
         }
         catch
         {
@@ -56,8 +66,7 @@ public sealed class MacPortsScanner(IProcessRunner runner, ILogger<MacPortsScann
 
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var port = ScannerHelper.FindExecutable("port") ?? "/opt/local/bin/port";
-        var result = await runner.RunAsync(port, "installed", cancellationToken);
+        var result = await runner.RunAsync(_executablePath!, "installed", cancellationToken);
         if (!result.Success)
         {
             logger.LogWarning("'port installed' failed ({Code}): {Err}", result.ExitCode, result.StandardError.Trim());
@@ -79,7 +88,7 @@ public sealed class MacPortsScanner(IProcessRunner runner, ILogger<MacPortsScann
     /// Port line format: "  portname @1.2.3_0 (active)"
     /// Multiple installed versions may appear; only the active one is emitted.
     /// </summary>
-    private static DiscoveredApp? ParseLine(string line)
+    private DiscoveredApp? ParseLine(string line)
     {
         // Only track the active version
         if (!line.Contains("(active)", StringComparison.Ordinal))
@@ -109,7 +118,7 @@ public sealed class MacPortsScanner(IProcessRunner runner, ILogger<MacPortsScann
 
         return new DiscoveredApp(
             name,
-            "MacPorts",
+            new AppIdentifier(Name, DisplayName, "Application"),
             AppKind.Packages,
             version,
             SuggestedMethod: UpdateMethod.MacPorts,

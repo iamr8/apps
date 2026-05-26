@@ -129,7 +129,7 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, ILogge
 
     private static string? MapEcosystem(AppRecord app)
     {
-        return app.Scanner switch
+        return app.Identifier.Name switch
         {
             "Dotnet" or "NuGet" or "NugetLocalTools" or "NugetProject" => "NuGet",
             "npm" or "NpmProject" or "Node" => "npm",

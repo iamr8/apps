@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 using apps.Infrastructure;
@@ -38,32 +39,34 @@ namespace apps.Components.Electron;
 public sealed class ElectronScanner(PlistReader plistReader, ILogger<ElectronScanner> logger)
     : IScanner
 {
+    private string[] _executablePaths = [];
+
     public string Name => "Electron";
 
     /// <inheritdoc/>
     /// <remarks>Electron apps live in /Applications and share the same source label as regular app bundles.</remarks>
     public string DisplayName => "Applications";
 
-    private static readonly string[] ScanRoots =
-    [
-        "/Applications",
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications"),
-        "/Applications/Utilities"
-    ];
+    public OS SupportedOS => OS.MacOS | OS.Windows;
 
-    /// <inheritdoc/>
-    public bool IsAvailable() => true;
+    public bool IsAvailable()
+    {
+        string[] scanRoots =
+        [
+            "/Applications",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications"),
+            "/Applications/Utilities"
+        ];
+
+        _executablePaths = scanRoots.Where(Directory.Exists).ToArray();
+        return _executablePaths.Length > 0;
+    }
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        foreach (var root in ScanRoots)
+        foreach (var root in _executablePaths)
         {
-            if (!Directory.Exists(root))
-            {
-                continue;
-            }
-
             IEnumerable<string> bundles;
             try
             {
@@ -139,7 +142,7 @@ public sealed class ElectronScanner(PlistReader plistReader, ILogger<ElectronSca
 
         return new DiscoveredApp(
             name,
-            Name,
+            new AppIdentifier(Name, DisplayName, "Application"),
             AppKind.App,
             version,
             bundlePath,
@@ -190,4 +193,3 @@ public sealed class ElectronScanner(PlistReader plistReader, ILogger<ElectronSca
         return (provider, owner, repo, url);
     }
 }
-

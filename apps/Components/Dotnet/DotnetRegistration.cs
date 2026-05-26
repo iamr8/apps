@@ -16,10 +16,6 @@ public static class DotnetRegistration
         services.AddCheckerClient("dotnet-releases", "https://dotnetcli.blob.core.windows.net", 4);
 
         services.AddSingleton<IScanner, DotnetScanner>();
-        services.AddSingleton<IScanner, DotnetRuntimeScanner>();
-        services.AddSingleton<IScanner, NugetGlobalToolsScanner>();
-        services.AddSingleton<IProjectLevelScanner, NugetProjectScanner>();
-        services.AddSingleton<IProjectLevelScanner, NugetLocalToolsScanner>();
         services.AddSingleton<IUpdateChecker, DotnetReleasesChecker>();
         services.AddSingleton<IUpdateChecker, NugetRegistryChecker>();
         return services;

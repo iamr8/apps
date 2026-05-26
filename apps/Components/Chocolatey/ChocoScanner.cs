@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 using apps.Infrastructure;
@@ -17,24 +18,29 @@ namespace apps.Components.Chocolatey;
 public sealed class ChocoScanner(IProcessRunner runner, ILogger<ChocoScanner> logger)
     : IScanner
 {
+    private string? _executablePath;
+
     /// <inheritdoc/>
     public string Name => "Chocolatey";
 
     /// <inheritdoc/>
     public string DisplayName => "Chocolatey";
 
-    /// <inheritdoc/>
-    public bool IsAvailable() => ScannerHelper.IsExecutableAvailable("choco");
+    public OS SupportedOS => OS.MacOS | OS.Windows;
+
+    public bool IsAvailable()
+    {
+        _executablePath = ScannerHelper.FindExecutable("choco");
+        return _executablePath is not null;
+    }
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var choco = ScannerHelper.FindExecutable("choco")!;
-
         ProcessResult result;
         try
         {
-            result = await runner.RunAsync(choco, "list", cancellationToken).ConfigureAwait(false);
+            result = await runner.RunAsync(_executablePath!, "list", cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -63,7 +69,7 @@ public sealed class ChocoScanner(IProcessRunner runner, ILogger<ChocoScanner> lo
     /// Parses a single <c>choco list</c> output line: <c>packagename version</c>.
     /// Header and summary lines are filtered by <see cref="SplitLines"/>.
     /// </summary>
-    private static DiscoveredApp? ParseLine(string line)
+    private DiscoveredApp? ParseLine(string line)
     {
         var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
 
@@ -77,7 +83,7 @@ public sealed class ChocoScanner(IProcessRunner runner, ILogger<ChocoScanner> lo
 
         return new DiscoveredApp(
             name,
-            "Chocolatey",
+            new AppIdentifier(Name, DisplayName, "Application"),
             AppKind.Packages,
             version,
             SuggestedMethod: UpdateMethod.Chocolatey,
@@ -94,4 +100,3 @@ public sealed class ChocoScanner(IProcessRunner runner, ILogger<ChocoScanner> lo
                 && !l.Contains("packages installed", StringComparison.OrdinalIgnoreCase));
     }
 }
-

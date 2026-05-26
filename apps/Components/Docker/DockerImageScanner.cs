@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 
@@ -24,62 +25,68 @@ namespace apps.Components.Docker;
 public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImageScanner> logger)
     : IScanner
 {
+    private string? _executablePath;
+
     public string Name => "Docker";
 
     /// <inheritdoc/>
     public string DisplayName => "Docker";
 
+    public OS SupportedOS => OS.MacOS | OS.Windows;
+
     /// <inheritdoc/>
     public string? GetSourceQualifier(AppKind kind) => "Image";
 
-    /// <inheritdoc/>
-    public bool StripTagFromDisplayName => true;
-
     public bool IsAvailable()
     {
-        if (!ScannerHelper.IsExecutableAvailable("docker"))
+        // TODO: needs fix on Windows
+        _executablePath = ScannerHelper.FindExecutable("docker");
+        if (_executablePath is not null)
         {
-            return false;
-        }
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            // Honour DOCKER_HOST when it points to a Unix socket — the docker binary uses it
+            // and we should probe the same path the client will actually connect to.
+            var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
+            if (dockerHost?.StartsWith("unix://", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                var socketPath = dockerHost["unix://".Length..];
+                if (!string.IsNullOrWhiteSpace(socketPath) && IsSocketListening(socketPath))
+                {
+                    return true;
+                }
+            }
 
-        // Honour DOCKER_HOST when it points to a Unix socket — the docker binary uses it
-        // and we should probe the same path the client will actually connect to.
-        var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
-        if (dockerHost?.StartsWith("unix://", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            var socketPath = dockerHost["unix://".Length..];
-            if (!string.IsNullOrWhiteSpace(socketPath) && IsSocketListening(socketPath))
+            string[] knownSockets =
+            [
+                "/var/run/docker.sock",
+                Path.Combine(home, ".docker", "run", "docker.sock"),
+                Path.Combine(home, ".orbstack", "run", "docker.sock"),
+                Path.Combine(home, "Library", "Containers", "com.docker.docker", "Data", "docker.raw.sock")
+            ];
+
+            // File.Exists alone is unreliable: the socket file may persist after the daemon
+            // stops (OrbStack and Docker Desktop both leave socket paths behind). Actually
+            // connecting to the socket is a zero-overhead probe that is definitively correct.
+            if (knownSockets.Any(IsSocketListening))
             {
                 return true;
             }
         }
 
-        string[] knownSockets =
-        [
-            "/var/run/docker.sock",
-            Path.Combine(home, ".docker", "run", "docker.sock"),
-            Path.Combine(home, ".orbstack", "run", "docker.sock"),
-            Path.Combine(home, "Library", "Containers", "com.docker.docker",
-                "Data", "docker.raw.sock")
-        ];
-
-        // File.Exists alone is unreliable: the socket file may persist after the daemon
-        // stops (OrbStack and Docker Desktop both leave socket paths behind). Actually
-        // connecting to the socket is a zero-overhead probe that is definitively correct.
-        return knownSockets.Any(IsSocketListening);
+        return false;
     }
+
+    /// <inheritdoc/>
+    public bool StripTagFromDisplayName => true;
 
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var docker = ScannerHelper.FindExecutable("docker") ?? "docker";
-
         // Use | as the column delimiter — it cannot appear in repository names, tags, or
         // digests (sha256:…). The original \t approach broke because Process passes \t as
         // the two characters '\' and 't', not a real tab, while the C# split used '\t' (tab).
         const string format = @"--format {{.Repository}}|{{.Tag}}|{{.Digest}}|{{.ID}}";
-        var result = await runner.RunAsync(docker, $"images {format}", cancellationToken);
+        var result = await runner.RunAsync(_executablePath!, $"images {format}", cancellationToken);
 
         if (!result.Success)
         {
@@ -132,7 +139,7 @@ public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImag
 
         return new DiscoveredApp(
             imageRef,
-            Name,
+            new AppIdentifier(Name, DisplayName, "Image"),
             AppKind.Packages,
             tag,
             SuggestedMethod: UpdateMethod.Specialised,
@@ -149,7 +156,6 @@ public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImag
     /// </summary>
     private static bool IsSocketListening(string path)
     {
-
         try
         {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);

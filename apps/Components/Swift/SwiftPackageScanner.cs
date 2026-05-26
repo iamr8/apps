@@ -15,12 +15,14 @@ namespace apps.Components.Swift;
 /// Opt-in via <c>--include-project-deps</c>.
 /// </summary>
 public sealed partial class SwiftPackageScanner(ProjectManifestFinder finder, ILogger<SwiftPackageScanner> logger)
-    : IProjectLevelScanner
+    : IScanner
 {
     public string Name => "SwiftPM";
 
     /// <inheritdoc/>
     public string DisplayName => "Swift PM";
+
+    public OS SupportedOS => OS.MacOS;
 
     // Matches .package(url: "URL", from: "1.0.0")
     //      or .package(url: "URL", exact: "1.0.0")
@@ -79,7 +81,7 @@ public sealed partial class SwiftPackageScanner(ProjectManifestFinder finder, IL
 
             yield return new DiscoveredApp(
                 name,
-                Name,
+                new AppIdentifier(Name, DisplayName, "Package"),
                 AppKind.Libraries,
                 version,
                 ProjectFile: manifestPath,

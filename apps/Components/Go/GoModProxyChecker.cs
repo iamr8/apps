@@ -39,7 +39,7 @@ public sealed class GoModProxyChecker(IHttpClientFactory httpClientFactory, ILog
     /// <inheritdoc/>
     public bool CanCheck(AppRecord app)
         => app.UpdateMethod == UpdateMethod.PackageRegistry
-           && GoScanners.Contains(app.Scanner)
+           && GoScanners.Contains(app.Identifier.Name)
            && app.UpdateMethodDetail is not null;
 
     /// <inheritdoc/>

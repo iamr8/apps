@@ -90,9 +90,15 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         var activeScanners = scanners
             .Where(s =>
             {
-                if (s is IProjectLevelScanner)
+                if (OperatingSystem.IsWindows() && !s.SupportedOS.HasFlag(OS.Windows))
                 {
-                    logger.LogDebug("Skipping project-level scanner {Name}", s.Name);
+                    logger.LogDebug("Scanner {Name} does not support Windows, skipping", s.Name);
+                    return false;
+                }
+
+                if (OperatingSystem.IsMacOS() && !s.SupportedOS.HasFlag(OS.MacOS))
+                {
+                    logger.LogDebug("Scanner {Name} does not support macOS, skipping", s.Name);
                     return false;
                 }
 

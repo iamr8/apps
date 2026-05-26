@@ -11,10 +11,9 @@ public static class MacOsRegistration
     /// <summary>Adds all macOS-native scanners and the Software Update checker.</summary>
     public static IServiceCollection AddMacOs(this IServiceCollection services)
     {
-        services.AddSingleton<IScanner, ApplicationsScanner>();
+        services.AddSingleton<IScanner, MacApplicationsScanner>();
         services.AddSingleton<IScanner, MacOsUpdateScanner>();
         services.AddSingleton<IScanner, SafariExtScanner>();
-        services.AddSingleton<IScanner, ChromeExtScanner>();
         services.AddSingleton<IScanner, XcodeScanner>();
         services.AddSingleton<IUpdateChecker, MacOsUpdateChecker>();
         return services;

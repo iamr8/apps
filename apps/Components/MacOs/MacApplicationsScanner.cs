@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 using apps.Infrastructure;
@@ -18,45 +19,39 @@ namespace apps.Components.MacOs;
 /// tracked for inventory but never subjected to update checks.
 /// All other apps are tagged <see cref="AppKind.App"/>.
 /// </summary>
-public sealed class ApplicationsScanner(PlistReader plistReader, ILogger<ApplicationsScanner> logger)
+public sealed class MacApplicationsScanner(PlistReader plistReader, ILogger<MacApplicationsScanner> logger)
     : IScanner
 {
+    private Dictionary<string, bool> _executablePaths = [];
+
     public string Name => "Applications";
 
     /// <inheritdoc/>
     public string DisplayName => "Applications";
 
-    private static readonly string[] ScanRoots =
-    [
-        "/Applications",
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications"),
-        // Chrome PWA apps are installed here by Chrome's "Add to Dock" / "Create shortcut" feature
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications", "Chrome Apps.localized"),
-        "/Applications/Utilities",
-        "/System/Applications"
-    ];
-
-    private static readonly HashSet<string> SystemRoots = new(StringComparer.OrdinalIgnoreCase) { "/System/Applications" };
+    public OS SupportedOS => OS.MacOS;
 
     /// <inheritdoc/>
     public bool IsAvailable()
     {
-        return true;
+        var scanRoots = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "/Applications", false },
+            { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications"), false },
+            // Chrome PWA apps are installed here by Chrome's "Add to Dock" / "Create shortcut" feature
+            { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications", "Chrome Apps.localized"), false },
+            { "/Applications/Utilities", false },
+            { "/System/Applications", true }
+        };
+        _executablePaths = scanRoots.Keys.Where(Directory.Exists).ToDictionary(path => path, path => scanRoots[path]);
+        return _executablePaths.Count > 0;
     }
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        foreach (var root in ScanRoots)
+        foreach (var (root, rootIsSystem) in _executablePaths)
         {
-            if (!Directory.Exists(root))
-            {
-                logger.LogDebug("Skipping missing directory: {Root}", root);
-                continue;
-            }
-
-            var rootIsSystem = SystemRoots.Contains(root);
-
             IEnumerable<string> appBundles;
             try
             {
@@ -139,7 +134,7 @@ public sealed class ApplicationsScanner(PlistReader plistReader, ILogger<Applica
 
         return new DiscoveredApp(
             name,
-            Name,
+            new AppIdentifier(Name, DisplayName),
             kind,
             version,
             bundlePath,
@@ -171,6 +166,6 @@ public sealed class ApplicationsScanner(PlistReader plistReader, ILogger<Applica
     private static bool IsMasInstalled(string bundlePath)
     {
         return Directory.Exists(Path.Combine(bundlePath, "Contents", "_MASReceipt"))
-            || Directory.Exists(Path.Combine(bundlePath, "Wrapper"));
+               || Directory.Exists(Path.Combine(bundlePath, "Wrapper"));
     }
 }

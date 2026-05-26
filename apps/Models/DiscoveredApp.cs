@@ -44,7 +44,7 @@ namespace apps.Models;
 /// </param>
 public sealed record DiscoveredApp(
     string Name,
-    string Scanner,
+    AppIdentifier Identifier,
     AppKind Kind,
     string? InstalledVersion,
     string? Path = null,
@@ -57,3 +57,5 @@ public sealed record DiscoveredApp(
     string? Digest = null,
     string? InstalledBuildVersion = null
 );
+
+public record struct AppIdentifier(string Name, string DisplayName, string? Qualifier = null);

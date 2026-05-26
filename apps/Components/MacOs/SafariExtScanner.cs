@@ -18,36 +18,37 @@ namespace apps.Components.MacOs;
 public sealed class SafariExtScanner(PlistReader plistReader, ILogger<SafariExtScanner> logger)
     : IScanner
 {
+    private string[] _executablePaths = [];
     public string Name => "SafariExt";
 
     /// <inheritdoc/>
     public string DisplayName => "Safari";
 
+    public OS SupportedOS => OS.MacOS;
+
     /// <inheritdoc/>
     /// <remarks>All apps from this scanner are extensions; the qualifier is always "Extension".</remarks>
     public string? GetSourceQualifier(AppKind kind) => "Extension";
 
-    private static readonly string[] AppRoots =
-    [
-        "/Applications",
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications"),
-        "/Applications/Utilities",
-        "/System/Applications"
-    ];
-
     /// <inheritdoc/>
-    public bool IsAvailable() => true;
+    public bool IsAvailable()
+    {
+        string[] appRoots =
+        [
+            "/Applications",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Applications"),
+            "/Applications/Utilities",
+            "/System/Applications"
+        ];
+        _executablePaths = appRoots.Where(Directory.Exists).ToArray();
+        return _executablePaths.Length > 0;
+    }
 
     /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        foreach (var root in AppRoots)
+        foreach (var root in _executablePaths)
         {
-            if (!Directory.Exists(root))
-            {
-                continue;
-            }
-
             IEnumerable<string> apps;
             try
             {
@@ -146,7 +147,7 @@ public sealed class SafariExtScanner(PlistReader plistReader, ILogger<SafariExtS
 
         return new DiscoveredApp(
             name,
-            Name,
+            new AppIdentifier(Name, DisplayName, "Extension"),
             AppKind.Extension,
             version,
             appexPath,
@@ -161,4 +162,3 @@ public sealed class SafariExtScanner(PlistReader plistReader, ILogger<SafariExtS
     private static bool IsMasInstalled(string bundlePath) =>
         Directory.Exists(Path.Combine(bundlePath, "Contents", "_MASReceipt"));
 }
-

@@ -41,7 +41,7 @@ public sealed class VsCodeExtChecker(IHttpClientFactory httpClientFactory, ILogg
     /// <inheritdoc/>
     public bool CanCheck(AppRecord app)
         => app.UpdateMethod == UpdateMethod.Specialised
-           && string.Equals(app.Scanner, "VSCode", StringComparison.Ordinal);
+           && string.Equals(app.Identifier.Name, "VSCode", StringComparison.Ordinal);
 
     /// <inheritdoc/>
     public async Task<UpdateCheckResult> CheckAsync(AppRecord app, CancellationToken cancellationToken = default)
