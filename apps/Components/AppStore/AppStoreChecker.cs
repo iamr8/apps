@@ -27,10 +27,7 @@ namespace apps.Components.AppStore;
 ///
 /// All iTunes queries fan out concurrently; results stream as each response arrives.
 /// </summary>
-public sealed partial class AppStoreChecker(
-    IProcessRunner runner,
-    IHttpClientFactory httpClientFactory,
-    ILogger<AppStoreChecker> logger)
+public sealed partial class AppStoreChecker(IProcessRunner runner, IHttpClientFactory httpClientFactory, ILogger<AppStoreChecker> logger)
     : IUpdateChecker
 {
     // "1333542190 1Password (8.10.36 -> 8.10.40)"
@@ -66,9 +63,7 @@ public sealed partial class AppStoreChecker(
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<UpdateCheckResult>> CheckBatchAsync(
-        IReadOnlyList<AppRecord> apps,
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<UpdateCheckResult>> CheckBatchAsync(IReadOnlyList<AppRecord> apps, CancellationToken cancellationToken = default)
     {
         var results = new List<UpdateCheckResult>(apps.Count);
         await foreach (var r in CheckStreamAsync(apps, cancellationToken).ConfigureAwait(false))
@@ -84,9 +79,7 @@ public sealed partial class AppStoreChecker(
     /// Pass 1: resolves apps via <c>mas outdated</c> instantly (no per-app I/O).
     /// Pass 2: fans out iTunes API calls for every app not resolved in pass 1.
     /// </remarks>
-    public async IAsyncEnumerable<UpdateCheckResult> CheckStreamAsync(
-        IReadOnlyList<AppRecord> apps,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<UpdateCheckResult> CheckStreamAsync(IReadOnlyList<AppRecord> apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var (outdated, masError) = await RunMasOutdatedAsync(cancellationToken).ConfigureAwait(false);
 
@@ -109,6 +102,7 @@ public sealed partial class AppStoreChecker(
             yield break;
         }
 
+        // ReSharper disable once UseCancellationTokenForIAsyncEnumerable
         await foreach (var task in Task.WhenEach(needsItunes.Select(a => CheckWithItunesAsync(a, cancellationToken))).ConfigureAwait(false))
         {
             yield return await task.ConfigureAwait(false);
@@ -121,10 +115,7 @@ public sealed partial class AppStoreChecker(
     /// Returns <see langword="null"/> when the app was absent from the output — which simply
     /// means mas didn't report it, not necessarily that it is up to date.
     /// </summary>
-    private static UpdateCheckResult? TryBuildMasResult(
-        AppRecord app,
-        Dictionary<string, (string Installed, string Latest)> outdated,
-        string? masError)
+    private static UpdateCheckResult? TryBuildMasResult(AppRecord app, Dictionary<string, (string Installed, string Latest)> outdated, string? masError)
     {
         if (masError is not null)
         {
@@ -304,4 +295,3 @@ internal sealed class ItunesResult
 
 [JsonSerializable(typeof(ItunesLookupResponse))]
 internal sealed partial class AppStoreJsonContext : JsonSerializerContext;
-

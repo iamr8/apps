@@ -48,35 +48,38 @@ public enum AppKind
 
 public static class AppKindExtensions
 {
-    /// <summary>Returns the CLI string representation of this kind (e.g. "app", "ext").</summary>
-    public static string ToCliString(this AppKind kind)
+    extension(AppKind kind)
     {
-        return kind switch
+        /// <summary>Returns the CLI string representation of this kind (e.g. "app", "ext").</summary>
+        public string ToCliString()
         {
-            AppKind.App => "app",
-            AppKind.SystemApp => "sysapp",
-            AppKind.Packages => "package",
-            AppKind.Libraries => "lib",
-            AppKind.Dep => "dep",
-            AppKind.Service => "service",
-            AppKind.Extension => "ext",
-            _ => kind.ToString().ToLowerInvariant()
-        };
-    }
+            return kind switch
+            {
+                AppKind.App => "app",
+                AppKind.SystemApp => "sysapp",
+                AppKind.Packages => "package",
+                AppKind.Libraries => "lib",
+                AppKind.Dep => "dep",
+                AppKind.Service => "service",
+                AppKind.Extension => "ext",
+                _ => kind.ToString().ToLowerInvariant()
+            };
+        }
 
-    /// <summary>Returns the section header label shown above each kind group in the results table.</summary>
-    public static string ToGroupLabel(this AppKind kind)
-    {
-        return kind switch
+        /// <summary>Returns the section header label shown above each kind group in the results table.</summary>
+        public string ToGroupLabel()
         {
-            AppKind.App => "Apps",
-            AppKind.Extension => "Extensions",
-            AppKind.Packages => "Developer Tools",
-            AppKind.Libraries => "Libraries",
-            AppKind.Dep => "Dependencies",
-            AppKind.Service => "Services",
-            _ => kind.ToString()
-        };
+            return kind switch
+            {
+                AppKind.App => "Apps",
+                AppKind.Extension => "Extensions",
+                AppKind.Packages => "Developer Tools",
+                AppKind.Libraries => "Libraries",
+                AppKind.Dep => "Dependencies",
+                AppKind.Service => "Services",
+                _ => kind.ToString()
+            };
+        }
     }
 
     /// <summary>Parses a CLI string (e.g. "app", "ext") into an <see cref="AppKind"/>.</summary>

@@ -17,11 +17,7 @@ namespace apps.Orchestration;
 /// Connection warm-up runs in parallel with scanning to pre-establish
 /// TLS connections for the check phase.
 /// </summary>
-public sealed class ScanOrchestrator(
-    IEnumerable<IScanner> scanners,
-    ConnectionWarmup warmup,
-    LiveProgressRenderer renderer,
-    ILogger<ScanOrchestrator> logger)
+public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionWarmup warmup, LiveProgressRenderer renderer, ILogger<ScanOrchestrator> logger)
 {
     private const int ChannelCapacity = 512;
 
@@ -29,7 +25,67 @@ public sealed class ScanOrchestrator(
     /// Runs all available scanners concurrently and returns every discovered app.
     /// Project-level scanners are excluded.
     /// </summary>
-    public async Task<IReadOnlyList<DiscoveredApp>> RunAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<DiscoveredApp>> InvokeAsync(CancellationToken cancellationToken = default)
+    {
+        var activeScanners = GetActiveScanners();
+        if (activeScanners.Length == 0)
+        {
+            logger.LogWarning("No scanners are available");
+            return [];
+        }
+
+        renderer.SetScannerCount(activeScanners.Length);
+
+        // Pre-establish HTTP connections to registry hosts while scanners run.
+        var warmupTask = warmup.WarmAsync(cancellationToken);
+
+        // Periodic timer to refresh the scan progress line with updated elapsed time
+        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var timerTask = renderer.RunScanTimerAsync(timerCts.Token);
+
+        var channel = Channel.CreateBounded<DiscoveredApp>(new BoundedChannelOptions(ChannelCapacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        var producerTask = Task.WhenAll(activeScanners.Select(s => RunScannerAsync(s, channel.Writer, cancellationToken)))
+            .ContinueWith(t =>
+            {
+                // Observe the faulted task to prevent UnobservedTaskException in GC.
+                _ = t.Exception;
+                channel.Writer.TryComplete();
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+
+        var results = await DrainAsync(channel.Reader, cancellationToken);
+
+        await producerTask.ConfigureAwait(false);
+        await warmupTask.ConfigureAwait(false);
+
+        await timerCts.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await timerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        renderer.RenderScanComplete(results.Count);
+        logger.LogInformation("Scan complete: {Total} apps discovered", results.Count);
+        return results;
+    }
+
+    public async Task<DiscoveredApp?> FindAsync(string packageName, CancellationToken cancellationToken = default)
+    {
+        // TODO: needs optimization
+        var discovered = await InvokeAsync(cancellationToken).ConfigureAwait(false);
+        var match = discovered.FirstOrDefault(a => string.Equals(a.Name, packageName, StringComparison.OrdinalIgnoreCase));
+        return match;
+    }
+
+    private IScanner[] GetActiveScanners()
     {
         var activeScanners = scanners
             .Where(s =>
@@ -48,49 +104,8 @@ public sealed class ScanOrchestrator(
 
                 return true;
             })
-            .ToList();
-
-        if (activeScanners.Count == 0)
-        {
-            logger.LogWarning("No scanners are available");
-            return [];
-        }
-
-        renderer.SetScannerCount(activeScanners.Count);
-
-        var channel = Channel.CreateBounded<DiscoveredApp>(new BoundedChannelOptions(ChannelCapacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = false
-        });
-
-        // Pre-establish HTTP connections to registry hosts while scanners run.
-        var warmupTask = warmup.WarmAsync(cancellationToken);
-
-        // Periodic timer to refresh the scan progress line with updated elapsed time
-        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var timerTask = renderer.RunScanTimerAsync(timerCts.Token);
-
-        var producerTask = Task.WhenAll(activeScanners.Select(s => RunScannerAsync(s, channel.Writer, cancellationToken)))
-            .ContinueWith(t =>
-            {
-                // Observe the faulted task to prevent UnobservedTaskException in GC.
-                _ = t.Exception;
-                channel.Writer.TryComplete();
-            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-
-        var results = await DrainAsync(channel.Reader, cancellationToken);
-
-        await producerTask.ConfigureAwait(false);
-        await warmupTask.ConfigureAwait(false);
-
-        await timerCts.CancelAsync().ConfigureAwait(false);
-        try { await timerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
-
-        renderer.RenderScanComplete(results.Count);
-        logger.LogInformation("Scan complete: {Total} apps discovered", results.Count);
-        return results;
+            .ToArray();
+        return activeScanners;
     }
 
     private async Task RunScannerAsync(IScanner scanner, ChannelWriter<DiscoveredApp> writer, CancellationToken cancellationToken)

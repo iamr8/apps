@@ -12,15 +12,15 @@ namespace apps.Orchestration;
 /// Coordinates the full pipeline: scan → resolve methods → check for updates → render results table.
 /// All data flows in-memory; no database is involved.
 /// </summary>
-public sealed class UpdateOrchestrator(
+public sealed class Orchestrator(
     ScanOrchestrator scanner,
-    MethodResolverOrchestrator resolver,
+    UpdateMethodResolver resolver,
     CheckOrchestrator checker,
     OsvAuditChecker auditor,
     GitHubAdvisoryEnricher enricher,
     PinManager pinManager,
     LiveProgressRenderer renderer,
-    ILogger<UpdateOrchestrator> logger)
+    ILogger<Orchestrator> logger)
 {
     /// <summary>
     /// Runs the full pipeline: scans all apps, resolves unresolved update methods via
@@ -28,7 +28,7 @@ public sealed class UpdateOrchestrator(
     /// Filters are applied via <paramref name="options"/>.
     /// Returns exit code: 0 = success, 1 = errors encountered.
     /// </summary>
-    public async Task<int> RunFullPipelineAsync(UpdateOptions options, CancellationToken cancellationToken = default)
+    public async Task<int> InvokeAsync(PipelineOptions options, CancellationToken cancellationToken = default)
     {
         await pinManager.LoadAsync(cancellationToken).ConfigureAwait(false);
 
@@ -50,26 +50,23 @@ public sealed class UpdateOrchestrator(
 
         var pipelineStopwatch = Stopwatch.StartNew();
 
-        var discovered = await scanner.RunAsync(cancellationToken).ConfigureAwait(false);
+        var discovered = await scanner.InvokeAsync(cancellationToken).ConfigureAwait(false);
 
         if (options.DryRun)
         {
             var scanned = discovered
-                .Where(a => a.Kind != AppKind.SystemApp)
-                .Where(a => options.ScopeKind is null || a.Kind == options.ScopeKind)
+                .Where(a => a.Kind != AppKind.SystemApp && (options.ScopeKind is null || a.Kind == options.ScopeKind))
                 .Select(AppRecord.From)
                 .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(PickBestRecord)
-                .OrderBy(a => KindOrder(a.Kind))
-                .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(a => KindOrder(a.Kind)).ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-
             renderer.RenderTable(scanned);
             return 0;
         }
 
         renderer.RenderPhaseStart("Resolving update methods…");
-        var resolved = await resolver.RunAsync(discovered, cancellationToken).ConfigureAwait(false);
+        var resolved = await resolver.InvokeAsync(discovered, cancellationToken).ConfigureAwait(false);
         renderer.RenderResolverComplete(4, resolved.Count);
 
         // Mark pinned packages before update checking so checkers can skip them
@@ -81,7 +78,7 @@ public sealed class UpdateOrchestrator(
             }
         }
 
-        var (_, _, errors) = await checker.RunAsync(resolved, cancellationToken).ConfigureAwait(false);
+        var (_, _, errors) = await checker.InvokeAsync(resolved, cancellationToken).ConfigureAwait(false);
 
         // Always run CVE audit (skipped only in dry-run mode which returns early above)
         renderer.SetAuditTotal(1);
@@ -99,7 +96,13 @@ public sealed class UpdateOrchestrator(
             cancellationToken).ConfigureAwait(false);
 
         await auditTimerCts.CancelAsync().ConfigureAwait(false);
-        try { await auditTimerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+        try
+        {
+            await auditTimerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
 
         renderer.RenderAuditComplete(auditBatchTotal, auditResults.Count);
 
@@ -117,13 +120,11 @@ public sealed class UpdateOrchestrator(
         var outdatedOnly = !options.ShowAll;
 
         var visible = resolved
-            .Where(a => a.Kind != AppKind.SystemApp)
-            .Where(a => options.ScopeKind is null || a.Kind == options.ScopeKind)
-            .Where(a => !outdatedOnly || a.UpdateAvailable || a.IsPinned || (a.Vulnerabilities is { Count: > 0 }))
+            .Where(a => a.Kind != AppKind.SystemApp && (options.ScopeKind is null || a.Kind == options.ScopeKind))
+            .Where(a => !outdatedOnly || a.UpdateAvailable || a.IsPinned || a.Vulnerabilities is { Count: > 0 })
             .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .Select(PickBestRecord)
-            .OrderBy(a => KindOrder(a.Kind))
-            .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(a => KindOrder(a.Kind)).ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         renderer.RenderTable(visible);
@@ -151,18 +152,15 @@ public sealed class UpdateOrchestrator(
     private async Task<int> HandlePinAsync(string packageName, CancellationToken cancellationToken)
     {
         // Scan to find the package and its current version
-        var discovered = await scanner.RunAsync(cancellationToken).ConfigureAwait(false);
-        var match = discovered.FirstOrDefault(a =>
-            string.Equals(a.Name, packageName, StringComparison.OrdinalIgnoreCase));
-
-        if (match is null)
+        var discovered = await scanner.FindAsync(packageName, cancellationToken).ConfigureAwait(false);
+        if (discovered is null)
         {
-            Console.Error.WriteLine($"Package '{packageName}' not found in scan results.");
+            await Console.Error.WriteLineAsync($"Package '{packageName}' not found in scan results.");
             return 1;
         }
 
-        await pinManager.PinAsync(match.Name, match.InstalledVersion, cancellationToken).ConfigureAwait(false);
-        Console.WriteLine($"Pinned {match.Name} @ {match.InstalledVersion ?? "any version"}");
+        await pinManager.PinAsync(discovered.Name, discovered.InstalledVersion, cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"Pinned {discovered.Name} @ {discovered.InstalledVersion ?? "any version"}");
         return 0;
     }
 
@@ -196,36 +194,35 @@ public sealed class UpdateOrchestrator(
         var ordered = group.OrderBy(a => (int)(a.UpdateMethod ?? UpdateMethod.None)).ToArray();
         var bestPriority = (int)(ordered[0].UpdateMethod ?? UpdateMethod.None);
 
-        var winner = ordered.FirstOrDefault(a =>
-            (int)(a.UpdateMethod ?? UpdateMethod.None) == bestPriority && a.Description is not null)
-            ?? ordered[0];
-
-        if (winner.Description is null)
+        var winner = ordered.FirstOrDefault(a => (int)(a.UpdateMethod ?? UpdateMethod.None) == bestPriority && a.Description is not null) ?? ordered[0];
+        if (winner.Description is not null)
         {
-            var donor = ordered.FirstOrDefault(a => a.Description is not null);
-            if (donor is not null)
+            return winner;
+        }
+
+        var donor = ordered.FirstOrDefault(a => a.Description is not null);
+        if (donor is not null)
+        {
+            return new AppRecord
             {
-                return new AppRecord
-                {
-                    Name = winner.Name,
-                    BundleId = winner.BundleId,
-                    InstalledVersion = winner.InstalledVersion,
-                    InstalledBuildVersion = winner.InstalledBuildVersion,
-                    Path = winner.Path,
-                    Scanner = winner.Scanner,
-                    Kind = winner.Kind,
-                    UpdateMethod = winner.UpdateMethod,
-                    UpdateMethodDetail = winner.UpdateMethodDetail,
-                    ProjectFile = winner.ProjectFile,
-                    Description = donor.Description,
-                    Digest = winner.Digest,
-                    LatestVersion = winner.LatestVersion,
-                    UpdateAvailable = winner.UpdateAvailable,
-                    LastCheckError = winner.LastCheckError,
-                    Vulnerabilities = winner.Vulnerabilities,
-                    IsPinned = winner.IsPinned
-                };
-            }
+                Name = winner.Name,
+                BundleId = winner.BundleId,
+                InstalledVersion = winner.InstalledVersion,
+                InstalledBuildVersion = winner.InstalledBuildVersion,
+                Path = winner.Path,
+                Scanner = winner.Scanner,
+                Kind = winner.Kind,
+                UpdateMethod = winner.UpdateMethod,
+                UpdateMethodDetail = winner.UpdateMethodDetail,
+                ProjectFile = winner.ProjectFile,
+                Description = donor.Description,
+                Digest = winner.Digest,
+                LatestVersion = winner.LatestVersion,
+                UpdateAvailable = winner.UpdateAvailable,
+                LastCheckError = winner.LastCheckError,
+                Vulnerabilities = winner.Vulnerabilities,
+                IsPinned = winner.IsPinned
+            };
         }
 
         return winner;

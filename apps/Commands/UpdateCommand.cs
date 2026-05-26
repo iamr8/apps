@@ -17,56 +17,67 @@ public static class UpdateCommand
 {
     private const string InstallPath = "/usr/local/bin/apps";
 
-    /// <summary>Configures the root command with update options and action.</summary>
-    public static void Configure(RootCommand rootCmd, UpdateOrchestrator orchestrator, IServiceProvider serviceProvider)
+    private static readonly Option<bool> OPTION_all = new("--all", "-a")
     {
-        var allOpt = new Option<bool>("--all", new[] { "-a" })
-        {
-            Description = "Show all apps, not just outdated ones"
-        };
+        Description = "Show all apps, not just outdated ones"
+    };
 
-        var kindOpt = new Option<string?>("--kind", new[] { "-k" })
-        {
-            Description = "Scope to one app kind: app | package | lib | dep | service | ext"
-        };
-        kindOpt.AcceptOnlyFromAmong("app", "package", "lib", "dep", "service", "ext");
+    private static readonly Option<string?> OPTION_kind = new("--kind", "-k")
+    {
+        Description = "Scope to one app kind: app | package | lib | dep | service | ext",
+    };
 
-        var dryRunOpt = new Option<bool>("--dry-run", new[] { "-d" })
-        {
-            Description = "Scan only — show discovered apps without checking for updates"
-        };
+    private static readonly Option<bool> OPTION_dryRun = new("--dry-run", "-d")
+    {
+        Description = "Scan only — show discovered apps without checking for updates"
+    };
 
-        var pinOpt = new Option<string?>("--pin", new[] { "-p" })
-        {
-            Description = "Pin a package at its current version to suppress update notifications"
-        };
+    private static readonly Option<string?> OPTION_pin = new("--pin", "-p")
+    {
+        Description = "Pin a package at its current version to suppress update notifications"
+    };
 
-        var unpinOpt = new Option<string?>("--unpin")
-        {
-            Description = "Remove a pin from a package so it appears in update results again"
-        };
+    private static readonly Option<string?> OPTION_unpin = new("--unpin")
+    {
+        Description = "Remove a pin from a package so it appears in update results again"
+    };
 
-        var installOpt = new Option<bool>("--install")
-        {
-            Description = "Install apps to /usr/local/bin so it can be run from anywhere"
-        };
+    private static readonly Option<bool> OPTION_install = new("--install")
+    {
+        Description = "Install \"apps\" to /usr/local/bin so it can be run from anywhere"
+    };
 
-        var upgradeOpt = new Option<bool>("--upgrade")
-        {
-            Description = "Check if a newer version of apps is available"
-        };
+    private static readonly Option<bool> OPTION_upgrade = new("--upgrade")
+    {
+        Description = "Check if a newer version of apps is available"
+    };
 
-        rootCmd.Options.Add(allOpt);
-        rootCmd.Options.Add(kindOpt);
-        rootCmd.Options.Add(dryRunOpt);
-        rootCmd.Options.Add(pinOpt);
-        rootCmd.Options.Add(unpinOpt);
-        rootCmd.Options.Add(installOpt);
-        rootCmd.Options.Add(upgradeOpt);
-
-        rootCmd.SetAction(async (pr, cancellationToken) =>
+    /// <summary>Configures the root command with update options and action.</summary>
+    public static void Configure(RootCommand rootCmd, Orchestrator orchestrator, IServiceProvider serviceProvider)
+    {
+        OPTION_kind.AcceptOnlyFromAmong("app", "package", "lib", "dep", "service", "ext");
+        OPTION_kind.Validators.Add(result =>
         {
-            if (pr.GetValue(upgradeOpt))
+            var value = result.GetValueOrDefault<string?>();
+            if (value is null || AppKindExtensions.TryParseCliString(value, out _))
+            {
+                return;
+            }
+
+            result.AddError($"Invalid value '{value}' for --kind. Valid options: {string.Join(" | ", Enum.GetValues<AppKind>().Select(c => c.ToCliString()))}");
+        });
+
+        rootCmd.Options.Add(OPTION_all);
+        rootCmd.Options.Add(OPTION_kind);
+        rootCmd.Options.Add(OPTION_dryRun);
+        rootCmd.Options.Add(OPTION_pin);
+        rootCmd.Options.Add(OPTION_unpin);
+        rootCmd.Options.Add(OPTION_install);
+        rootCmd.Options.Add(OPTION_upgrade);
+
+        rootCmd.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (parseResult.GetValue(OPTION_upgrade))
             {
                 Console.WriteLine($"apps v{SelfUpdateChecker.CurrentVersion}");
                 var httpFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
@@ -74,42 +85,38 @@ public static class UpdateCommand
                 return 0;
             }
 
-            if (pr.GetValue(installOpt))
+            if (parseResult.GetValue(OPTION_install))
             {
-                return HandleInstall();
+                return HandleInstallToShell();
             }
 
-            var pinValue = pr.GetValue(pinOpt);
-            var unpinValue = pr.GetValue(unpinOpt);
-            var allValue = pr.GetValue(allOpt);
-            var dryRunValue = pr.GetValue(dryRunOpt);
-            var kindStr = pr.GetValue(kindOpt);
+            var pinArg = parseResult.GetValue(OPTION_pin);
+            var unpinArg = parseResult.GetValue(OPTION_unpin);
+            var allArg = parseResult.GetValue(OPTION_all);
+            var dryRunArg = parseResult.GetValue(OPTION_dryRun);
+            var kindArg = parseResult.GetValue(OPTION_kind);
 
-            if (pinValue is not null || unpinValue is not null)
+            if (pinArg is not null || unpinArg is not null)
             {
-                if (allValue || dryRunValue || kindStr is not null)
+                if (allArg || dryRunArg || kindArg is not null)
                 {
-                    await Console.Error.WriteLineAsync(
-                        "Error: --pin and --unpin cannot be combined with --all, --kind, or --dry-run.");
+                    await Console.Error.WriteLineAsync("Error: --pin and --unpin cannot be combined with --all, --kind, or --dry-run.");
                     return 1;
                 }
 
-                if (pinValue is not null && unpinValue is not null)
+                if (pinArg is not null && unpinArg is not null)
                 {
-                    await Console.Error.WriteLineAsync(
-                        "Error: --pin and --unpin cannot be used together.");
+                    await Console.Error.WriteLineAsync("Error: --pin and --unpin cannot be used together.");
                     return 1;
                 }
             }
 
             AppKind? kind = null;
-
-            if (kindStr is not null)
+            if (kindArg is not null)
             {
-                if (!AppKindExtensions.TryParseCliString(kindStr, out var k))
+                if (!AppKindExtensions.TryParseCliString(kindArg, out var k))
                 {
-                    await Console.Error.WriteLineAsync(
-                        $"Unknown kind '{kindStr}'. Valid: app | package | lib | dep | service | ext");
+                    await Console.Error.WriteLineAsync($"Unknown kind '{kindArg}'. Valid: {string.Join(", ", Enum.GetValues<AppKind>().Select(v => v.ToCliString()))}");
                     return 1;
                 }
 
@@ -118,16 +125,16 @@ public static class UpdateCommand
 
             LiveProgressRenderer.RenderClear();
 
-            var options = new UpdateOptions
+            var options = new PipelineOptions
             {
                 ScopeKind = kind,
-                ShowAll = allValue || kind is not null,
-                DryRun = dryRunValue,
-                PinPackage = pinValue,
-                UnpinPackage = unpinValue
+                ShowAll = allArg || kind is not null,
+                DryRun = dryRunArg,
+                PinPackage = pinArg,
+                UnpinPackage = unpinArg
             };
 
-            var result = await orchestrator.RunFullPipelineAsync(options, cancellationToken);
+            var result = await orchestrator.InvokeAsync(options, cancellationToken);
 
             var httpClientFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
             await SelfUpdateChecker.CheckForUpdateAsync(httpClientFactory, cancellationToken);
@@ -136,7 +143,7 @@ public static class UpdateCommand
         });
     }
 
-    private static int HandleInstall()
+    private static int HandleInstallToShell()
     {
         var currentExe = Environment.ProcessPath;
 

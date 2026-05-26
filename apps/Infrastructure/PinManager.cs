@@ -30,11 +30,9 @@ public sealed class PinManager
         }
 
         await using var stream = File.OpenRead(PinFilePath);
-        var data = await JsonSerializer.DeserializeAsync(stream, PinJsonContext.Default.PinFile, cancellationToken)
-            .ConfigureAwait(false);
+        var data = await JsonSerializer.DeserializeAsync(stream, PinJsonContext.Default.PinFile, cancellationToken).ConfigureAwait(false);
 
         _pins = new Dictionary<string, PinEntry>(StringComparer.OrdinalIgnoreCase);
-
         if (data?.Pins is not null)
         {
             foreach (var pin in data.Pins)
@@ -66,7 +64,12 @@ public sealed class PinManager
     public async Task PinAsync(string name, string? version, CancellationToken cancellationToken = default)
     {
         await LoadAsync(cancellationToken).ConfigureAwait(false);
-        _pins![name] = new PinEntry { Name = name, Version = version, PinnedAt = DateTimeOffset.UtcNow };
+        _pins![name] = new PinEntry
+        {
+            Name = name,
+            Version = version,
+            PinnedAt = DateTimeOffset.UtcNow
+        };
         await SaveAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -78,12 +81,6 @@ public sealed class PinManager
         await SaveAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Returns all currently pinned entries.</summary>
-    public IReadOnlyList<PinEntry> GetAll()
-    {
-        return _pins?.Values.ToArray() ?? [];
-    }
-
     private async Task SaveAsync(CancellationToken cancellationToken)
     {
         var dir = Path.GetDirectoryName(PinFilePath)!;
@@ -91,8 +88,7 @@ public sealed class PinManager
 
         var data = new PinFile { Pins = _pins!.Values.ToArray() };
         await using var stream = File.Create(PinFilePath);
-        await JsonSerializer.SerializeAsync(stream, data, PinJsonContext.Default.PinFile, cancellationToken)
-            .ConfigureAwait(false);
+        await JsonSerializer.SerializeAsync(stream, data, PinJsonContext.Default.PinFile, cancellationToken).ConfigureAwait(false);
     }
 }
 
@@ -119,4 +115,3 @@ public sealed class PinFile
 [JsonSerializable(typeof(PinFile))]
 [JsonSerializable(typeof(PinEntry))]
 internal sealed partial class PinJsonContext : JsonSerializerContext;
-

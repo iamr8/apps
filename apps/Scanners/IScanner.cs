@@ -21,7 +21,6 @@ public interface IScanner
     /// </summary>
     string? GetSourceQualifier(AppKind kind) => null;
 
-
     /// <summary>
     /// When <see langword="true"/>, a colon-delimited version tag is stripped from the display
     /// name before rendering (e.g. Docker <c>repo:tag</c> → <c>repo</c>).

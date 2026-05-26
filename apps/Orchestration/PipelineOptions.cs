@@ -3,9 +3,9 @@ using apps.Models;
 namespace apps.Orchestration;
 
 /// <summary>
-/// Options passed from <see cref="Commands.UpdateCommand"/> to <see cref="UpdateOrchestrator"/>.
+/// Options passed from <see cref="Commands.UpdateCommand"/> to <see cref="Orchestrator"/>.
 /// </summary>
-public sealed class UpdateOptions
+public sealed class PipelineOptions
 {
     /// <summary>Restrict the pipeline to a single app kind. <c>null</c> means all kinds.</summary>
     public AppKind? ScopeKind { get; init; }
@@ -20,7 +20,6 @@ public sealed class UpdateOptions
     /// When <c>true</c>, only scan and display discovered apps without checking for updates.
     /// </summary>
     public bool DryRun { get; init; }
-
 
     /// <summary>
     /// Package name to pin at its current version. <c>null</c> means no pin action.

@@ -17,10 +17,7 @@ namespace apps.Orchestration;
 /// Results print to the terminal as each check completes — no waiting for
 /// the full batch.
 /// </summary>
-public sealed class CheckOrchestrator(
-    IEnumerable<IUpdateChecker> checkers,
-    LiveProgressRenderer renderer,
-    ILogger<CheckOrchestrator> logger)
+public sealed class CheckOrchestrator(IEnumerable<IUpdateChecker> checkers, LiveProgressRenderer renderer, ILogger<CheckOrchestrator> logger)
 {
     private const int ResultChannelCapacity = 256;
 
@@ -29,16 +26,14 @@ public sealed class CheckOrchestrator(
     /// back to the <see cref="AppRecord"/> objects in-memory, and streams progress to the terminal.
     /// Returns a (total, updates, errors) summary tuple.
     /// </summary>
-    public async Task<(int Total, int Updates, int Errors)> RunAsync(
-        IReadOnlyList<AppRecord> apps,
-        CancellationToken cancellationToken = default)
+    public async Task<(int Total, int Updates, int Errors)> InvokeAsync(IReadOnlyList<AppRecord> apps, CancellationToken cancellationToken = default)
     {
         var checkersByMethod = checkers
             .GroupBy(c => c.Method)
             .ToDictionary(g => g.Key, g => g.ToList());
 
         var grouped = apps
-            .Where(a => a.UpdateMethod.HasValue && !a.IsPinned)
+            .Where(a => a is { UpdateMethod: not null, IsPinned: false })
             .GroupBy(a => a.UpdateMethod!.Value)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<AppRecord>)[..g]);
 
@@ -53,22 +48,18 @@ public sealed class CheckOrchestrator(
             .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
 
-        var resultChannel = Channel.CreateBounded<UpdateCheckResult>(
-            new BoundedChannelOptions(ResultChannelCapacity)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true,
-                SingleWriter = false
-            });
+        var resultChannel = Channel.CreateBounded<UpdateCheckResult>(new BoundedChannelOptions(ResultChannelCapacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
 
         var checkGroups = grouped
             .Where(kv => checkersByMethod.ContainsKey(kv.Key))
             .SelectMany(kv => checkersByMethod[kv.Key].Select(checker =>
             {
-                var eligible = kv.Value
-                    .Where(a => checker.CanCheck(a))
-                    .ToList();
-
+                var eligible = kv.Value.Where(checker.CanCheck).ToList();
                 return (eligible, checker, method: kv.Key);
             }))
             .ToList();
@@ -121,7 +112,13 @@ public sealed class CheckOrchestrator(
         }
 
         await timerCts.CancelAsync().ConfigureAwait(false);
-        try { await timerTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+        try
+        {
+            await timerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
 
         // Count unique non-system apps with available updates (matches the final summary logic)
         var uniqueUpdates = apps
@@ -138,12 +135,7 @@ public sealed class CheckOrchestrator(
         return (total, uniqueUpdates, errors);
     }
 
-    private async Task CheckGroupAsync(
-        UpdateMethod method,
-        List<AppRecord> apps,
-        IUpdateChecker checker,
-        ChannelWriter<UpdateCheckResult> writer,
-        CancellationToken cancellationToken)
+    private async Task CheckGroupAsync(UpdateMethod method, List<AppRecord> apps, IUpdateChecker checker, ChannelWriter<UpdateCheckResult> writer, CancellationToken cancellationToken)
     {
         if (apps.Count == 0)
         {

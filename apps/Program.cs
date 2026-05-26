@@ -45,9 +45,9 @@ internal static class Program
         services.AddAuditComponent();
 
         services.AddSingleton<ScanOrchestrator>();
-        services.AddSingleton<MethodResolverOrchestrator>();
+        services.AddSingleton<UpdateMethodResolver>();
         services.AddSingleton<CheckOrchestrator>();
-        services.AddSingleton<UpdateOrchestrator>();
+        services.AddSingleton<Orchestrator>();
 
         await using var serviceProvider = services.BuildServiceProvider();
 
@@ -65,7 +65,7 @@ internal static class Program
 
         var rootCmd = new RootCommand("apps — discover and check for updates on macOS");
 
-        var orch = serviceProvider.GetRequiredService<UpdateOrchestrator>();
+        var orch = serviceProvider.GetRequiredService<Orchestrator>();
         UpdateCommand.Configure(rootCmd, orch, serviceProvider);
 
         int exitCode;

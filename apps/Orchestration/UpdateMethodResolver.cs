@@ -20,10 +20,7 @@ namespace apps.Orchestration;
 ///   <item>Chocolatey packages (priority 8), if <c>choco</c> is installed</item>
 /// </list>
 /// </summary>
-public sealed class MethodResolverOrchestrator(
-    IProcessRunner runner,
-    LiveProgressRenderer renderer,
-    ILogger<MethodResolverOrchestrator> logger)
+public sealed class UpdateMethodResolver(IProcessRunner runner, LiveProgressRenderer renderer, ILogger<UpdateMethodResolver> logger)
 {
     private static readonly string[] BrewCandidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
 
@@ -31,9 +28,7 @@ public sealed class MethodResolverOrchestrator(
     /// Maps all discovered apps to <see cref="AppRecord"/> instances, resolving update methods
     /// for apps whose scanner did not suggest one. Returns all records.
     /// </summary>
-    public async Task<IReadOnlyList<AppRecord>> RunAsync(
-        IReadOnlyList<DiscoveredApp> discovered,
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<AppRecord>> InvokeAsync(IReadOnlyList<DiscoveredApp> discovered, CancellationToken cancellationToken = default)
     {
         var unresolved = discovered.Where(a => a.SuggestedMethod is null).ToArray();
 
@@ -51,12 +46,12 @@ public sealed class MethodResolverOrchestrator(
 
         var (casks, formulas, brewDescriptions) = await RunStepWithTimerAsync(
             completedSteps, totalSteps, "loading Homebrew data",
-            ct => LoadBrewInstalledAsync(ct), cancellationToken).ConfigureAwait(false);
+            LoadBrewInstalledAsync, cancellationToken).ConfigureAwait(false);
         completedSteps++;
 
         var chocoPackages = await RunStepWithTimerAsync(
             completedSteps, totalSteps, "loading Chocolatey data",
-            ct => LoadChocoInstalledAsync(ct), cancellationToken).ConfigureAwait(false);
+            LoadChocoInstalledAsync, cancellationToken).ConfigureAwait(false);
         completedSteps++;
 
         var resolved = new Dictionary<string, (UpdateMethod Method, string? Detail, string? Description)>(StringComparer.OrdinalIgnoreCase);
@@ -194,9 +189,7 @@ public sealed class MethodResolverOrchestrator(
     /// Tries multiple name strategies: normalized full name, .app filename from path,
     /// and individual significant words from the display name.
     /// </summary>
-    private async Task<Dictionary<string, (string Token, string Version, string? Desc)>> LoadBrewCatalogAsync(
-        DiscoveredApp[] candidates,
-        CancellationToken cancellationToken)
+    private async Task<Dictionary<string, (string Token, string Version, string? Desc)>> LoadBrewCatalogAsync(DiscoveredApp[] candidates, CancellationToken cancellationToken)
     {
         var results = new Dictionary<string, (string Token, string Version, string? Desc)>(StringComparer.OrdinalIgnoreCase);
         var brew = BrewCandidates.FirstOrDefault(File.Exists);
@@ -252,20 +245,6 @@ public sealed class MethodResolverOrchestrator(
         var tokens = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        void TryAdd(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return;
-            }
-
-            var normalized = NormalizeName(value);
-            if (normalized.Length > 1 && seen.Add(normalized))
-            {
-                tokens.Add(normalized);
-            }
-        }
-
         // 1. Full normalized name (e.g. "jetbrains-rider")
         TryAdd(app.Name);
 
@@ -290,6 +269,20 @@ public sealed class MethodResolverOrchestrator(
         }
 
         return tokens;
+
+        void TryAdd(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            var normalized = NormalizeName(value);
+            if (normalized.Length > 1 && seen.Add(normalized))
+            {
+                tokens.Add(normalized);
+            }
+        }
     }
 
     /// <summary>
@@ -719,7 +712,7 @@ public sealed class MethodResolverOrchestrator(
     private static bool IsChocoHeaderLine(string line)
     {
         return line.StartsWith("Chocolatey", StringComparison.OrdinalIgnoreCase)
-            || line.Contains("packages installed", StringComparison.OrdinalIgnoreCase);
+               || line.Contains("packages installed", StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -756,4 +749,3 @@ internal sealed class BrewCatalogCask
 /// <summary>Source-generated JSON context for <see cref="apps.Orchestration.BrewCatalogJsonContext.BrewCatalogRoot"/> (AOT-safe).</summary>
 [JsonSerializable(typeof(BrewCatalogRoot))]
 internal sealed partial class BrewCatalogJsonContext : JsonSerializerContext;
-
