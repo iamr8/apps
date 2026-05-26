@@ -20,13 +20,9 @@ jobs:
   build:
     strategy:
       matrix:
-        include:
-          - os: macos-15
-            rid: osx-arm64
-          - os: macos-13
-            rid: osx-x64
+        rid: [osx-arm64, osx-x64]
 
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v6
@@ -45,7 +41,12 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Publish binary
-        run: VERSION=${{ steps.version.outputs.version }} ./publish.sh ${{ matrix.rid }}
+        run: |
+          dotnet publish apps/apps.csproj \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -o dist
 
       - name: Archive binary
         run: |
