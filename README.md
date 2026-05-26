@@ -9,6 +9,7 @@ The tool is **non-destructive**: it reports what is outdated but never performs 
 ![Security](https://img.shields.io/github/actions/workflow/status/iamr8/apps/security.yml?branch=main&style=flat-square&label=security)
 ![Latest Release](https://img.shields.io/github/v/release/iamr8/apps?style=flat-square)
 ![Last Commit](https://img.shields.io/github/last-commit/iamr8/apps?style=flat-square)
+[![Build and Release](https://github.com/iamr8/apps/actions/workflows/release.yml/badge.svg)](https://github.com/iamr8/apps/actions/workflows/release.yml)
 
 ## Features
 
