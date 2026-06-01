@@ -5,28 +5,28 @@ namespace apps.Components.Dotnet;
 internal sealed class DotnetReleasesIndex
 {
     [JsonPropertyName("releases-index")]
-    public DotnetChannelEntry[]? ReleasesIndex { get; init; }
+    public DotnetChannelEntry[] ReleasesIndex { get; init; } = [];
 }
 
 internal sealed class DotnetChannelEntry
 {
     [JsonPropertyName("channel-version")]
-    public string? ChannelVersion { get; init; }
+    public string ChannelVersion { get; init; } = null!;
 
     [JsonPropertyName("latest-release")]
-    public string? LatestRelease { get; init; }
+    public string LatestRelease { get; init; } = null!;
 
     [JsonPropertyName("latest-sdk")]
-    public string? LatestSdk { get; init; }
+    public string LatestSdk { get; init; } = null!;
 
     [JsonPropertyName("latest-runtime")]
-    public string? LatestRuntime { get; init; }
+    public string LatestRuntime { get; init; } = null!;
 
     [JsonPropertyName("support-phase")]
-    public string? SupportPhase { get; init; }
+    public string SupportPhase { get; init; } = null!;
 
     [JsonPropertyName("releases.json")]
-    public string? ReleasesJsonUrl { get; init; }
+    public string ReleasesJsonUrl { get; init; } = null!;
 }
 
 internal sealed class NugetVersionIndex

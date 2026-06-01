@@ -1,8 +1,8 @@
 using System.Threading.Channels;
 
+using apps.Components;
 using apps.Infrastructure;
 using apps.Models;
-using apps.Scanners;
 
 using Microsoft.Extensions.Logging;
 
@@ -25,9 +25,9 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
     /// Runs all available scanners concurrently and returns every discovered app.
     /// Project-level scanners are excluded.
     /// </summary>
-    public async Task<IReadOnlyList<DiscoveredApp>> InvokeAsync(CancellationToken cancellationToken = default)
+    public async Task<Dictionary<string, DiscoveredApp>> ScanAsync(AppKind? kind, CancellationToken cancellationToken = default)
     {
-        var activeScanners = GetActiveScanners();
+        var activeScanners = GetActiveScanners(kind);
         if (activeScanners.Length == 0)
         {
             logger.LogWarning("No scanners are available");
@@ -43,24 +43,24 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var timerTask = renderer.RunScanTimerAsync(timerCts.Token);
 
-        var channel = Channel.CreateBounded<DiscoveredApp>(new BoundedChannelOptions(ChannelCapacity)
+        var results = new Dictionary<string, DiscoveredApp>(256);
+        await foreach (var app in activeScanners.WhenAll<IScanner, DiscoveredApp>(RunScannerAsync, cancellationToken: cancellationToken))
         {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = false
-        });
-
-        var producerTask = Task.WhenAll(activeScanners.Select(s => RunScannerAsync(s, channel.Writer, cancellationToken)))
-            .ContinueWith(t =>
+            if (results.TryGetValue(app.Name, out var existing))
             {
-                // Observe the faulted task to prevent UnobservedTaskException in GC.
-                _ = t.Exception;
-                channel.Writer.TryComplete();
-            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                existing = existing with
+                {
+                    Description = existing.Description ?? app.Description,
+                    SubApps = (existing.SubApps ?? []).Append(app with { IsDuplicate = true, Description = null }).ToList()
+                };
+                results[app.Name] = existing;
+            }
+            else
+            {
+                results.Add(app.Name, app);
+            }
+        }
 
-        var results = await DrainAsync(channel.Reader, cancellationToken);
-
-        await producerTask.ConfigureAwait(false);
         await warmupTask.ConfigureAwait(false);
 
         await timerCts.CancelAsync().ConfigureAwait(false);
@@ -80,12 +80,12 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
     public async Task<DiscoveredApp?> FindAsync(string packageName, CancellationToken cancellationToken = default)
     {
         // TODO: needs optimization
-        var discovered = await InvokeAsync(cancellationToken).ConfigureAwait(false);
-        var match = discovered.FirstOrDefault(a => string.Equals(a.Name, packageName, StringComparison.OrdinalIgnoreCase));
-        return match;
+        var discovered = await ScanAsync(kind: null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var match = discovered.FirstOrDefault(a => string.Equals(a.Value.Name, packageName, StringComparison.OrdinalIgnoreCase));
+        return match.Value;
     }
 
-    private IScanner[] GetActiveScanners()
+    private IScanner[] GetActiveScanners(AppKind? kind)
     {
         var activeScanners = scanners
             .Where(s =>
@@ -99,6 +99,12 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
                 if (OperatingSystem.IsMacOS() && !s.SupportedOS.HasFlag(OS.MacOS))
                 {
                     logger.LogDebug("Scanner {Name} does not support macOS, skipping", s.Name);
+                    return false;
+                }
+
+                if (kind.HasValue && !s.Kind.HasFlag(kind.Value))
+                {
+                    logger.LogDebug("Scanner {Name} does not support AppKind {Kind}, skipping", s.Name, kind.Value);
                     return false;
                 }
 
@@ -122,6 +128,11 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         {
             await foreach (var app in scanner.ScanAsync(cancellationToken).ConfigureAwait(false))
             {
+                if (!scanner.Kind.HasFlag(app.Kind))
+                {
+                    throw new InvalidOperationException($"App {app.Name} is of kind {app.Kind} but scanner {scanner.Name} only supports {scanner.Kind}");
+                }
+
                 await writer.WriteAsync(app, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -136,17 +147,5 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         }
 
         renderer.RenderScannerDone(scanner.Name);
-    }
-
-    private static async Task<List<DiscoveredApp>> DrainAsync(ChannelReader<DiscoveredApp> reader, CancellationToken cancellationToken)
-    {
-        var results = new List<DiscoveredApp>(256);
-
-        await foreach (var app in reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
-        {
-            results.Add(app);
-        }
-
-        return results;
     }
 }

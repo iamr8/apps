@@ -14,10 +14,8 @@ namespace apps.Orchestration;
 /// </summary>
 public sealed class Orchestrator(
     ScanOrchestrator scanner,
-    UpdateMethodResolver resolver,
     CheckOrchestrator checker,
     OsvAuditChecker auditor,
-    GitHubAdvisoryEnricher enricher,
     PinManager pinManager,
     LiveProgressRenderer renderer,
     ILogger<Orchestrator> logger)
@@ -50,96 +48,65 @@ public sealed class Orchestrator(
 
         var pipelineStopwatch = Stopwatch.StartNew();
 
-        var discovered = await scanner.InvokeAsync(cancellationToken).ConfigureAwait(false);
+        var discovered = await scanner.ScanAsync(options.ScopeKind, cancellationToken).ConfigureAwait(false);
 
         if (options.DryRun)
         {
             var scanned = discovered
-                .Where(a => a.Kind != AppKind.SystemApp && (options.ScopeKind is null || a.Kind == options.ScopeKind))
+                .Where(a => options.ScopeKind is null || a.Value.Kind == options.ScopeKind)
                 .Select(AppRecord.From)
-                .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(PickBestRecord)
-                .OrderBy(a => KindOrder(a.Kind)).ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+                //.GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+                //.Select(PickBestRecord)
+                .OrderBy(a => KindOrder(a.App.Kind)).ThenBy(a => a.App.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             renderer.RenderTable(scanned);
             return 0;
         }
 
-        renderer.RenderPhaseStart("Resolving update methods…");
-        var resolved = await resolver.InvokeAsync(discovered, cancellationToken).ConfigureAwait(false);
-        renderer.RenderResolverComplete(4, resolved.Count);
+        //
+        // renderer.RenderPhaseStart("Resolving update methods…");
+        // var resolved = await resolver.InvokeAsync(discovered, cancellationToken).ConfigureAwait(false);
+        // renderer.RenderResolverComplete(4, resolved.Count);
+        var resolved = discovered.Select(AppRecord.From).ToArray();
 
         // Mark pinned packages before update checking so checkers can skip them
         foreach (var app in resolved)
         {
-            if (pinManager.IsPinned(app.Name, app.InstalledVersion))
+            if (pinManager.IsPinned(app.App.Name, app.App.InstalledVersion))
             {
                 app.IsPinned = true;
             }
         }
 
-        var (_, _, errors) = await checker.InvokeAsync(resolved, cancellationToken).ConfigureAwait(false);
+        var (_, _, errors) = await checker.CheckAsync(resolved, cancellationToken).ConfigureAwait(false);
 
-        // Always run CVE audit (skipped only in dry-run mode which returns early above)
-        renderer.SetAuditTotal(1);
-        using var auditTimerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var auditTimerTask = renderer.RunAuditTimerAsync(auditTimerCts.Token);
-        var auditBatchTotal = 1;
-
-        var auditResults = await auditor.AuditAsync(
-            resolved,
-            (done, total) =>
-            {
-                auditBatchTotal = total;
-                renderer.RenderAuditProgress(done, total);
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        await auditTimerCts.CancelAsync().ConfigureAwait(false);
-        try
-        {
-            await auditTimerTask.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        renderer.RenderAuditComplete(auditBatchTotal, auditResults.Count);
-
-        // Enrich vulnerabilities with patched version info from GitHub Advisory Database
-        if (auditResults.Count > 0)
-        {
-            await enricher.EnrichAsync(auditResults, null, cancellationToken).ConfigureAwait(false);
-        }
-
-        foreach (var result in auditResults)
-        {
-            result.App.Vulnerabilities = result.Vulnerabilities;
-        }
+        // await auditor.AuditAsync(resolved, cancellationToken).ConfigureAwait(false);
 
         var outdatedOnly = !options.ShowAll;
 
-        var visible = resolved
-            .Where(a => a.Kind != AppKind.SystemApp && (options.ScopeKind is null || a.Kind == options.ScopeKind))
-            .Where(a => !outdatedOnly || a.UpdateAvailable || a.IsPinned || a.Vulnerabilities is { Count: > 0 })
-            .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(PickBestRecord)
-            .OrderBy(a => KindOrder(a.Kind)).ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+        var v = resolved
+            .Where(r => r.App.Kind != AppKind.SystemApp)
+            .Where(a => options.ScopeKind is null || a.App.Kind == options.ScopeKind);
+        if (!options.ShowAll)
+        {
+            v = v.Where(a => a.UpdateAvailable);
+        }
+
+        var visible = v
+            .OrderBy(a => KindOrder(a.App.Kind)).ThenBy(a => a.App.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         renderer.RenderTable(visible);
 
-        var totalUpdates = resolved
-            .Where(a => a.Kind != AppKind.SystemApp && a.UpdateAvailable)
-            .Select(a => a.Name)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-        var totalPinned = resolved.Count(a => a.IsPinned);
-        var totalVulnerable = resolved.Count(a => a.Vulnerabilities is { Count: > 0 });
+        var totalDiscovered = visible.Length;
+        var totalChecked = visible.Count(a => a.App.UpdateMethod is not null and not UpdateMethod.None);
+        var totalUpdates = visible.Count(a => a.UpdateAvailable);
+        var totalPinned = visible.Count(a => a.IsPinned);
+        var totalVulnerable = visible.Count(a => a.Vulnerabilities is { Count: > 0 });
 
-        renderer.RenderSummary(
-            discovered: resolved.Count(a => a.Kind != AppKind.SystemApp),
-            checked_: resolved.Count(a => a.Kind != AppKind.SystemApp && a.UpdateMethod is not null and not UpdateMethod.None),
+        LiveProgressRenderer.RenderSummary(
+            discovered: totalDiscovered,
+            @checked: totalChecked,
             updatesAvailable: totalUpdates,
             pinned: totalPinned,
             vulnerabilities: totalVulnerable,
@@ -177,54 +144,10 @@ public sealed class Orchestrator(
         {
             AppKind.App => 0,
             AppKind.Extension => 1,
-            AppKind.Packages => 2,
-            AppKind.Libraries => 3,
-            AppKind.Dep => 4,
-            AppKind.Service => 5,
+            AppKind.Package => 2,
+            AppKind.DevTool => 3,
+            AppKind.Service => 4,
             _ => 99
         };
-    }
-
-    /// <summary>
-    /// Selects the best record from a group of duplicates: highest-priority update method wins;
-    /// when priorities tie, prefers the entry that carries a description so metadata is not lost.
-    /// </summary>
-    private static AppRecord PickBestRecord(IGrouping<string, AppRecord> group)
-    {
-        var ordered = group.OrderBy(a => (int)(a.UpdateMethod ?? UpdateMethod.None)).ToArray();
-        var bestPriority = (int)(ordered[0].UpdateMethod ?? UpdateMethod.None);
-
-        var winner = ordered.FirstOrDefault(a => (int)(a.UpdateMethod ?? UpdateMethod.None) == bestPriority && a.Description is not null) ?? ordered[0];
-        if (winner.Description is not null)
-        {
-            return winner;
-        }
-
-        var donor = ordered.FirstOrDefault(a => a.Description is not null);
-        if (donor is not null)
-        {
-            return new AppRecord
-            {
-                Name = winner.Name,
-                BundleId = winner.BundleId,
-                InstalledVersion = winner.InstalledVersion,
-                InstalledBuildVersion = winner.InstalledBuildVersion,
-                Path = winner.Path,
-                Identifier = winner.Identifier,
-                Kind = winner.Kind,
-                UpdateMethod = winner.UpdateMethod,
-                UpdateMethodDetail = winner.UpdateMethodDetail,
-                ProjectFile = winner.ProjectFile,
-                Description = donor.Description,
-                Digest = winner.Digest,
-                LatestVersion = winner.LatestVersion,
-                UpdateAvailable = winner.UpdateAvailable,
-                LastCheckError = winner.LastCheckError,
-                Vulnerabilities = winner.Vulnerabilities,
-                IsPinned = winner.IsPinned
-            };
-        }
-
-        return winner;
     }
 }

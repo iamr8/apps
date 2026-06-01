@@ -1,4 +1,6 @@
 ﻿using System.CommandLine;
+using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 using apps.Commands;
@@ -17,12 +19,22 @@ namespace apps;
 
 internal static class Program
 {
+    public static readonly string Version;
+
+    static Program()
+    {
+        var version = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+        Version = version?.InformationalVersion.Split('+')[0] ?? "unknown";
+    }
+
     private static async Task<int> Main(string[] args)
     {
         EnsureSafeWorkingDirectory();
 
         var consoleSink = SerilogConfigurator.CreateConsoleSink();
-        var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "apps", "log");
+        var logDir = Debugger.IsAttached
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "apps-logs")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "apps", "log");
         SerilogConfigurator.Configure(logDir, consoleSink);
         var services = new ServiceCollection();
 
@@ -39,13 +51,11 @@ internal static class Program
         services.AddSingleton<LiveProgressRenderer>();
         services.AddSingleton<ProjectManifestFinder>();
         services.AddSingleton<ConnectionWarmup>();
-        services.AddTransient<RateLimitedHttpHandler>();
 
         services.AddAllComponents();
         services.AddAuditComponent();
 
         services.AddSingleton<ScanOrchestrator>();
-        services.AddSingleton<UpdateMethodResolver>();
         services.AddSingleton<CheckOrchestrator>();
         services.AddSingleton<Orchestrator>();
 

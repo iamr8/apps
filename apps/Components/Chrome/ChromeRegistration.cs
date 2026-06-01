@@ -1,15 +1,17 @@
-using apps.Scanners;
+using apps.Infrastructure;
 
 using Microsoft.Extensions.DependencyInjection;
 
 namespace apps.Components.Chrome;
 
-/// <summary>Registers macOS-native scanners (Applications, Software Update, Safari, Chrome, Xcode) and the macOS update checker.</summary>
+/// <summary>Registers Chrome extension scanner and update checker.</summary>
 public static class ChromeRegistration
 {
-    /// <summary>Adds all macOS-native scanners and the Software Update checker.</summary>
+    /// <summary>Adds Chrome extension scanner and the CRX update checker client.</summary>
     public static IServiceCollection AddChrome(this IServiceCollection services)
     {
+        services.AddCheckerClient("chrome-update", "https://clients2.google.com", 6);
+
         services.AddSingleton<IScanner, ChromeExtScanner>();
         return services;
     }

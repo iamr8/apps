@@ -1,10 +1,12 @@
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
+using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using System.Xml;
 
+using apps.Infrastructure;
 using apps.Models;
-using apps.Scanners;
 
 using Microsoft.Extensions.Logging;
 
@@ -17,10 +19,12 @@ namespace apps.Components.JetBrains;
 /// and JAR-format plugins (<c>lib/*.jar</c> containing <c>META-INF/plugin.xml</c>).
 /// One <see cref="AppKind.Extension"/> entry is emitted per unique plugin ID.
 /// </summary>
-public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logger)
+public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory, ILogger<JetBrainsPluginScanner> logger)
     : IScanner
 {
-    private string[] _executablePaths;
+    private string[] _executablePaths = [];
+
+    public int Order => 5;
 
     public string Name => "JetBrains";
 
@@ -28,9 +32,7 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
     public string DisplayName => "JetBrains";
 
     public OS SupportedOS => OS.MacOS | OS.Windows;
-
-    /// <inheritdoc/>
-    public string? GetSourceQualifier(AppKind kind) => kind == AppKind.Extension ? "Plugin" : null;
+    public AppKind Kind => AppKind.Extension;
 
     public bool IsAvailable()
     {
@@ -102,7 +104,7 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
                     logger.LogDebug(ex, "Failed to read plugin at {Path}", pluginDir);
                 }
 
-                if (app is null || !seen.Add(app.SuggestedMethodDetail ?? app.Name))
+                if (app is null || !seen.Add(app.UpdateMethodDetail ?? app.Name))
                 {
                     continue;
                 }
@@ -110,6 +112,113 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
                 yield return app;
             }
         }
+    }
+
+    public async IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (apps.Length == 0)
+        {
+            yield break;
+        }
+
+        await foreach (var item in apps.WhenAll<AppRecord, (AppRecord Record, bool Error)>(CheckPluginVersionAsync, cancellationToken: cancellationToken))
+        {
+            yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Queries the JetBrains plugin repository for the latest version of a single plugin.
+    /// Resolves string XML IDs to numeric IDs when needed.
+    /// </summary>
+    private async Task CheckPluginVersionAsync(AppRecord record, ChannelWriter<(AppRecord Record, bool Error)> writer, CancellationToken cancellationToken)
+    {
+        var xmlId = record.App.UpdateMethodDetail;
+        if (string.IsNullOrWhiteSpace(xmlId))
+        {
+            await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            using var client = httpClientFactory.CreateClient("jetbrains");
+
+            string numericId;
+            if (IsNumeric(xmlId))
+            {
+                numericId = xmlId;
+            }
+            else
+            {
+                var resolved = await ResolveNumericIdAsync(client, xmlId, cancellationToken).ConfigureAwait(false);
+                if (resolved is null)
+                {
+                    await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                numericId = resolved;
+            }
+
+            var updates = await client
+                .GetFromJsonAsync(
+                    $"/api/plugins/{numericId}/updates?channel=&size=1",
+                    JetBrainsJsonContext.Default.JetBrainsPluginUpdateArray,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var latest = updates?.FirstOrDefault()?.Version;
+            if (!string.IsNullOrWhiteSpace(latest))
+            {
+                record.App.LatestVersion = latest;
+            }
+
+            await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "JetBrains plugin check failed for {Name} (id={Id})",
+                record.App.Name,
+                xmlId);
+            await writer.WriteAsync((record, true), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Searches the JetBrains plugin repository by XML ID and returns the numeric plugin ID,
+    /// or <see langword="null"/> when the plugin is not publicly listed.
+    /// </summary>
+    private async Task<string?> ResolveNumericIdAsync(HttpClient client, string xmlId, CancellationToken cancellationToken)
+    {
+        using var response = await client
+            .GetAsync($"/api/plugins?xmlId={Uri.EscapeDataString(xmlId)}&size=1", cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        var searchResult = await response.Content
+            .ReadFromJsonAsync(JetBrainsJsonContext.Default.JetBrainsPluginInfoArray, cancellationToken)
+            .ConfigureAwait(false);
+
+        var id = searchResult?.FirstOrDefault()?.Id;
+        return id.HasValue ? id.Value.ToString() : null;
+    }
+
+    private static bool IsNumeric(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (!char.IsAsciiDigit(ch))
+            {
+                return false;
+            }
+        }
+
+        return value.Length > 0;
     }
 
     /// <summary>
@@ -194,13 +303,16 @@ public sealed class JetBrainsPluginScanner(ILogger<JetBrainsPluginScanner> logge
             return null;
         }
 
-        return new DiscoveredApp(
+        return new DiscoveredApp(this,
             name ?? displayId,
             new AppIdentifier(Name, DisplayName, "Plugin"),
-            AppKind.Extension,
-            string.IsNullOrWhiteSpace(version) ? null : version,
-            sourcePath,
-            SuggestedMethod: UpdateMethod.Specialised,
-            SuggestedMethodDetail: displayId);
+            AppKind.Extension)
+        {
+            PackageId = id,
+            InstalledVersion = version,
+            Path = sourcePath,
+            UpdateMethod = UpdateMethod.Specialised,
+            UpdateMethodDetail = displayId,
+        };
     }
 }

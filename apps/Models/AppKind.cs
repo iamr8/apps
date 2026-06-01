@@ -6,44 +6,32 @@ namespace apps.Models;
 /// Discriminator for every discovered entry.
 /// CLI-facing string values (used with --kind): app | sysapp | package | lib | dep | service | ext
 /// </summary>
-public enum AppKind
+[Flags]
+public enum AppKind : byte
 {
+    None = 0,
+
     /// <summary>User-installed GUI .app bundles from /Applications, ~/Applications.</summary>
-    App,
+    App = 1,
 
     /// <summary>
     /// Apple / OS system applications (com.apple.* bundle ID or /System/Applications).
     /// These are tracked for inventory only — they cannot be updated independently of the OS.
     /// </summary>
-    SystemApp,
+    SystemApp = 2,
 
-    /// <summary>
-    /// Tools, runtimes, and globally installed CLI packages:
-    /// .NET SDK, Node.js, Go, Xcode, dotnet global tools, npm -g packages,
-    /// Go GOPATH/bin binaries, Docker images, Homebrew formulas and casks, MacPorts ports.
-    /// </summary>
-    Packages,
+    Package = 4,
 
-    /// <summary>
-    /// Project-level library dependencies declared in manifest files:
-    /// NuGet packages (*.csproj), npm packages (package.json), Go modules (go.mod),
-    /// Swift packages (Package.swift), vcpkg dependencies (vcpkg.json).
-    /// </summary>
-    Libraries,
-
-    /// <summary>
-    /// Miscellaneous or ambiguous dependencies not yet classified into a more specific kind.
-    /// </summary>
-    Dep,
+    DevTool = 8,
 
     /// <summary>Background daemons in LaunchAgents/LaunchDaemons or Login Items.</summary>
-    Service,
+    Service = 16,
 
     /// <summary>
     /// IDE add-ons and editor plug-ins installed into a specific host application:
     /// VS Code extensions, JetBrains IDE plugins.
     /// </summary>
-    Extension
+    Extension = 32
 }
 
 public static class AppKindExtensions
@@ -57,9 +45,8 @@ public static class AppKindExtensions
             {
                 AppKind.App => "app",
                 AppKind.SystemApp => "sysapp",
-                AppKind.Packages => "package",
-                AppKind.Libraries => "lib",
-                AppKind.Dep => "dep",
+                AppKind.Package => "package",
+                AppKind.DevTool => "dev",
                 AppKind.Service => "service",
                 AppKind.Extension => "ext",
                 _ => kind.ToString().ToLowerInvariant()
@@ -73,9 +60,8 @@ public static class AppKindExtensions
             {
                 AppKind.App => "Apps",
                 AppKind.Extension => "Extensions",
-                AppKind.Packages => "Developer Tools",
-                AppKind.Libraries => "Libraries",
-                AppKind.Dep => "Dependencies",
+                AppKind.Package => "Packages",
+                AppKind.DevTool => "Dev Tools",
                 AppKind.Service => "Services",
                 _ => kind.ToString()
             };
@@ -89,12 +75,11 @@ public static class AppKindExtensions
         {
             "app" => AppKind.App,
             "sysapp" => AppKind.SystemApp,
-            "package" => AppKind.Packages,
-            "lib" => AppKind.Libraries,
-            "dep" => AppKind.Dep,
+            "package" => AppKind.Package,
+            "dev" => AppKind.DevTool,
             "service" => AppKind.Service,
             "ext" => AppKind.Extension,
-            _ => (AppKind)(-1)
+            _ => AppKind.None
         };
         return (int)kind >= 0;
     }

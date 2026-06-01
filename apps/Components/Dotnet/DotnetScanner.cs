@@ -1,10 +1,9 @@
-using System.Diagnostics.CodeAnalysis;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Xml;
+using System.Threading.Channels;
 
 using apps.Infrastructure;
-using apps.Scanners;
 using apps.Models;
 
 using Microsoft.Extensions.Logging;
@@ -12,13 +11,17 @@ using Microsoft.Extensions.Logging;
 namespace apps.Components.Dotnet;
 
 /// <summary>
-/// Discovers all .NET SDKs installed on the system via <c>dotnet --list-sdks</c>.
-/// Each installed SDK version is emitted as a separate <see cref="AppKind.Packages"/> entry.
+/// Discovers .NET SDKs, runtimes, and global tools installed on the system.
+/// Checks SDKs/runtimes against the .NET releases index and global tools against the NuGet registry.
 /// </summary>
-public sealed class DotnetScanner(IProcessRunner runner, ProjectManifestFinder finder, ILogger<DotnetScanner> logger)
+public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcessRunner runner, ILogger<DotnetScanner> logger)
     : IScanner
 {
+    private readonly ConcurrentDictionary<string, Task<string?>> _inflightNuget = new(StringComparer.OrdinalIgnoreCase);
+
     private string? _executablePath;
+
+    public int Order => 5;
 
     public string Name => "Dotnet";
 
@@ -26,6 +29,7 @@ public sealed class DotnetScanner(IProcessRunner runner, ProjectManifestFinder f
     public string DisplayName => ".NET";
 
     public OS SupportedOS => OS.MacOS | OS.Windows;
+    public AppKind Kind => AppKind.DevTool;
 
     public bool IsAvailable()
     {
@@ -49,15 +53,57 @@ public sealed class DotnetScanner(IProcessRunner runner, ProjectManifestFinder f
         {
             yield return tool;
         }
+    }
 
-        await foreach (var local in EnumerateLocalTools(cancellationToken))
+    public async IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        DotnetReleasesIndex? releasesIndex = null;
+        try
         {
-            yield return local;
+            using var client = httpClientFactory.CreateClient("dotnet-releases");
+            await using var stream = await client.GetStreamAsync("/dotnet/release-metadata/releases-index.json", cancellationToken).ConfigureAwait(false);
+            releasesIndex = await JsonSerializer.DeserializeAsync(stream, DotnetJsonContext.Default.DotnetReleasesIndex, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to fetch .NET releases index");
         }
 
-        await foreach (var project in EnumerateProjects(cancellationToken))
+        var nugets = new List<AppRecord>();
+        foreach (var record in apps)
         {
-            yield return project;
+            if (record.App.Identifier.Qualifier == "Global Tool")
+            {
+                nugets.Add(record);
+            }
+            else
+            {
+                if (releasesIndex?.ReleasesIndex is null)
+                {
+                    yield return (record, false);
+                    continue;
+                }
+
+                var channelVersion = MajorMinor(record.App.InstalledVersion);
+                var channel = releasesIndex.ReleasesIndex.FirstOrDefault(c => c.ChannelVersion.Equals(channelVersion, StringComparison.OrdinalIgnoreCase));
+                if (channel is null)
+                {
+                    logger.LogDebug("No .NET releases channel found for {Version}", channelVersion);
+                    yield return (record, false);
+                    continue;
+                }
+
+                record.App.LatestVersion = record.App.Identifier.Qualifier == "Runtime" ? channel.LatestRuntime : channel.LatestSdk;
+                yield return (record, false);
+            }
+        }
+
+        if (nugets.Count > 0)
+        {
+            await foreach (var item in nugets.WhenAll<AppRecord, (AppRecord Record, bool Error)>(CheckNuGetVersionAsync, cancellationToken: cancellationToken))
+            {
+                yield return item;
+            }
         }
     }
 
@@ -66,13 +112,34 @@ public sealed class DotnetScanner(IProcessRunner runner, ProjectManifestFinder f
         var result = await runner.RunAsync(_executablePath!, "--list-runtimes", cancellationToken);
         if (result.Success)
         {
-            foreach (var line in Lines(result.StandardOutput))
-            {
-                var app = ParseRuntimeLine(line);
-                if (app is not null)
+            var lines = result.StandardOutput.Trim()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(c =>
                 {
-                    yield return app;
-                }
+                    var parts = c.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                    var name = parts[0];
+                    var version = parts[1];
+                    var path = parts[2].Trim('[', ']');
+                    return new
+                    {
+                        Name = $"{name} {MajorMinor(version)}",
+                        Version = version,
+                        Path = path
+                    };
+                })
+                .GroupBy(l => l.Name) // Group by runtime name (e.g. "Microsoft.AspNetCore.App") to avoid duplicates when multiple versions are installed
+                .Select(g => g.OrderByDescending(c => c.Version, VersionComparer.Instance).First()) // Take the latest version in each group
+                .ToArray();
+            foreach (var line in lines)
+            {
+                yield return new DiscoveredApp(this, line.Name,
+                    new AppIdentifier(Name, DisplayName, "Runtime"),
+                    AppKind.DevTool)
+                {
+                    InstalledVersion = line.Version,
+                    Path = Path.Combine(line.Path, line.Version),
+                    UpdateMethod = UpdateMethod.Sdk,
+                };
             }
         }
         else
@@ -87,13 +154,33 @@ public sealed class DotnetScanner(IProcessRunner runner, ProjectManifestFinder f
         var result = await runner.RunAsync(_executablePath!, "--list-sdks", cancellationToken);
         if (result.Success)
         {
-            foreach (var line in Lines(result.StandardOutput))
-            {
-                var app = ParseSdkLine(line);
-                if (app is not null)
+            var lines = result.StandardOutput.Trim()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(c =>
                 {
-                    yield return app;
-                }
+                    var parts = c.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                    var version = parts[0];
+                    var path = parts[1].Trim('[', ']');
+                    return new
+                    {
+                        Name = MajorMinor(version),
+                        Version = version,
+                        Path = path
+                    };
+                })
+                .GroupBy(l => l.Name)
+                .Select(g => g.OrderByDescending(c => c.Version, VersionComparer.Instance).First()) // Take the latest version in each group
+                .ToArray();
+            foreach (var line in lines)
+            {
+                yield return new DiscoveredApp(this, $".NET {line.Name}",
+                    new AppIdentifier(Name, DisplayName, "Sdk"),
+                    AppKind.DevTool)
+                {
+                    InstalledVersion = line.Version,
+                    Path = Path.Combine(line.Path, line.Version),
+                    UpdateMethod = UpdateMethod.Sdk,
+                };
             }
         }
         else
@@ -105,237 +192,107 @@ public sealed class DotnetScanner(IProcessRunner runner, ProjectManifestFinder f
     private async IAsyncEnumerable<DiscoveredApp> EnumerateGlobalTools([EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var result = await runner.RunAsync(_executablePath!, "tool list -g", cancellationToken);
-        if (!result.Success)
+        if (result.Success)
+        {
+            var lines = result.StandardOutput.Trim()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Skip(2) // Skip header line
+                .Select(c =>
+                {
+                    var parts = c.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                    var name = parts[0];
+                    var version = parts[1];
+                    var command = parts[2];
+                    return new
+                    {
+                        Name = name,
+                        Version = version,
+                        Command = command
+                    };
+                })
+                .ToArray();
+            foreach (var line in lines)
+            {
+                yield return new DiscoveredApp(this, line.Name,
+                    new AppIdentifier(Name, DisplayName, "Global Tool"),
+                    AppKind.DevTool)
+                {
+                    InstalledVersion = line.Version,
+                    UpdateMethod = UpdateMethod.PackageRegistry,
+                };
+            }
+        }
+        else
         {
             logger.LogWarning("'dotnet tool list -g' failed: {Err}", result.StandardError.Trim());
-            yield break;
         }
-
-        var lines = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        // Skip the two header lines:
-        //   "Package Id   Version   Commands"
-        //   "------…"
-        var dataLines = lines.SkipWhile(l => l.StartsWith("Package", StringComparison.OrdinalIgnoreCase) ||
-                                             l.StartsWith("------", StringComparison.Ordinal));
-
-        foreach (var line in dataLines)
-        {
-            var app = ParseGlobalToolsLine(line);
-            if (app is not null)
-            {
-                yield return app;
-            }
-        }
-    }
-
-    private async IAsyncEnumerable<DiscoveredApp> EnumerateLocalTools([EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        await foreach (var manifestPath in finder.FindAsync("dotnet-tools.json", cancellationToken))
-        {
-            await foreach (var app in ParseLocalToolManifestAsync(manifestPath, cancellationToken))
-            {
-                yield return app;
-            }
-        }
-    }
-
-    private async IAsyncEnumerable<DiscoveredApp> EnumerateProjects([EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        foreach (var pattern in new[] { "*.csproj", "*.fsproj", "Directory.Packages.props" })
-        {
-            await foreach (var manifestPath in finder.FindAsync(pattern, cancellationToken))
-            {
-                await foreach (var app in ParseProjectManifestAsync(manifestPath, cancellationToken))
-                {
-                    yield return app;
-                }
-            }
-        }
-    }
-
-    private async IAsyncEnumerable<DiscoveredApp> ParseLocalToolManifestAsync(string manifestPath, [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        string json;
-        try
-        {
-            json = await File.ReadAllTextAsync(manifestPath, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Failed to read tool manifest: {Path}", manifestPath);
-            yield break;
-        }
-
-        JsonDocument doc;
-        try
-        {
-            doc = JsonDocument.Parse(json);
-        }
-        catch (JsonException ex)
-        {
-            logger.LogDebug(ex, "Failed to parse tool manifest JSON: {Path}", manifestPath);
-            yield break;
-        }
-
-        using (doc)
-        {
-            if (!doc.RootElement.TryGetProperty("tools", out var tools))
-            {
-                yield break;
-            }
-
-            foreach (var entry in tools.EnumerateObject())
-            {
-                var packageId = entry.Name;
-                string? version = null;
-
-                if (entry.Value.TryGetProperty("version", out var verProp))
-                {
-                    version = verProp.GetString();
-                }
-
-                yield return new DiscoveredApp(
-                    packageId,
-                    new AppIdentifier(Name, DisplayName, "Local Tool"),
-                    AppKind.Libraries,
-                    version,
-                    ProjectFile: manifestPath,
-                    SuggestedMethod: UpdateMethod.PackageRegistry,
-                    SuggestedMethodDetail: packageId);
-            }
-        }
-    }
-
-    private async IAsyncEnumerable<DiscoveredApp> ParseProjectManifestAsync(string manifestPath, [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        string xml;
-        try
-        {
-            xml = await File.ReadAllTextAsync(manifestPath, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Failed to read manifest: {Path}", manifestPath);
-            yield break;
-        }
-
-        XmlDocument doc;
-        try
-        {
-            doc = new XmlDocument();
-            doc.LoadXml(xml);
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Failed to parse XML: {Path}", manifestPath);
-            yield break;
-        }
-
-        // Match both <PackageReference> (project files) and <PackageVersion> (Central Package Management)
-        var nodes = doc.SelectNodes("//*[local-name()='PackageReference' or local-name()='PackageVersion']");
-        if (nodes is null)
-        {
-            yield break;
-        }
-
-        foreach (XmlNode node in nodes)
-        {
-            var include = node.Attributes?["Include"]?.Value?.Trim();
-            var version = node.Attributes?["Version"]?.Value?.Trim()
-                          ?? node.SelectSingleNode("*[local-name()='Version']")?.InnerText?.Trim();
-
-            if (string.IsNullOrWhiteSpace(include)) continue;
-
-            yield return new DiscoveredApp(
-                include,
-                new AppIdentifier("NuGet", "NuGet", "Package"),
-                AppKind.Libraries,
-                string.IsNullOrWhiteSpace(version) ? null : version,
-                ProjectFile: manifestPath,
-                SuggestedMethod: UpdateMethod.PackageRegistry,
-                SuggestedMethodDetail: include);
-        }
-    }
-
-    private DiscoveredApp? ParseSdkLine(string line)
-    {
-        // "6.0.136 [/usr/local/share/dotnet/sdk]"
-        var spaceIdx = line.IndexOf(' ');
-        if (spaceIdx < 0)
-        {
-            return null;
-        }
-
-        var version = line[..spaceIdx];
-        var basePath = ExtractBracketPath(line);
-
-        return new DiscoveredApp(
-            $".NET SDK {MajorMinor(version)}",
-            new AppIdentifier(Name, DisplayName, "SDK"),
-            AppKind.Packages,
-            version,
-            basePath is not null ? Path.Combine(basePath, version) : null,
-            SuggestedMethod: UpdateMethod.Sdk);
-    }
-
-    private DiscoveredApp? ParseRuntimeLine(string line)
-    {
-        // "Microsoft.NETCore.App 8.0.5 [/usr/local/share/dotnet/shared/Microsoft.NETCore.App]"
-        var parts = line.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
-        {
-            return null;
-        }
-
-        var runtimeName = parts[0];
-        var version = parts[1];
-        var basePath = ExtractBracketPath(line);
-
-        return new DiscoveredApp(
-            $"{runtimeName} {MajorMinor(version)}",
-            new AppIdentifier("DotnetRuntime", DisplayName, "Runtime"),
-            AppKind.Packages,
-            version,
-            basePath is not null ? Path.Combine(basePath, version) : null,
-            SuggestedMethod: UpdateMethod.Sdk,
-            SuggestedMethodDetail: runtimeName);
     }
 
     /// <summary>
-    /// Line format (variable-width columns, multiple spaces as separator):
-    ///   "dotnet-ef                            8.0.4        dotnet-ef"
+    /// Checks the latest version of a global tool from the NuGet registry and writes the result to the channel.
     /// </summary>
-    private DiscoveredApp? ParseGlobalToolsLine(string line)
+    private async Task CheckNuGetVersionAsync(AppRecord record, ChannelWriter<(AppRecord Record, bool Error)> writer, CancellationToken cancellationToken)
     {
-        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
+        try
         {
-            return null;
+            var latest = await FetchLatestNuGetVersionAsync(record.App.Name, cancellationToken).ConfigureAwait(false);
+            if (latest is not null)
+            {
+                record.App.LatestVersion = latest;
+            }
+
+            await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
         }
-
-        var packageId = parts[0];
-        var version = parts[1];
-
-        return new DiscoveredApp(
-            packageId,
-            new AppIdentifier(Name, DisplayName, "Global Tool"),
-            AppKind.Packages,
-            version,
-            SuggestedMethod: UpdateMethod.PackageRegistry,
-            SuggestedMethodDetail: packageId);
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "NuGet version check failed for {Package}", record.App.Name);
+            await writer.WriteAsync((record, true), cancellationToken).ConfigureAwait(false);
+        }
     }
 
-    private static string? ExtractBracketPath(string line)
+    /// <summary>
+    /// Fetches the latest stable version of a NuGet package from the flat container API.
+    /// Uses deduplication to avoid redundant requests for the same package.
+    /// </summary>
+    private Task<string?> FetchLatestNuGetVersionAsync(string name, CancellationToken cancellationToken)
     {
-        var open = line.LastIndexOf('[');
-        var close = line.LastIndexOf(']');
-        if (open < 0 || close <= open)
+        return _inflightNuget.GetOrAdd(name, id => FetchNuGetVersionCoreAsync(id, cancellationToken));
+    }
+
+    private async Task<string?> FetchNuGetVersionCoreAsync(string name, CancellationToken cancellationToken)
+    {
+        using var client = httpClientFactory.CreateClient("nuget");
+        var lowerId = name.ToLowerInvariant();
+        var url = $"/v3-flatcontainer/{lowerId}/index.json";
+
+        using var response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogDebug("NuGet returned {Status} for {Package}",
+                response.StatusCode,
+                name);
+            return null;
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var index = await JsonSerializer.DeserializeAsync(stream, DotnetJsonContext.Default.NugetVersionIndex, cancellationToken).ConfigureAwait(false);
+
+        if (index?.Versions is null or { Length: 0 })
         {
             return null;
         }
 
-        return line[(open + 1)..close];
+        // Return the last stable version (no prerelease tag)
+        for (var i = index.Versions.Length - 1; i >= 0; i--)
+        {
+            var v = index.Versions[i];
+            if (!v.Contains('-', StringComparison.Ordinal))
+            {
+                return v;
+            }
+        }
+
+        return index.Versions[^1];
     }
 
     /// <summary>
@@ -353,12 +310,5 @@ public sealed class DotnetScanner(IProcessRunner runner, ProjectManifestFinder f
 
         var secondDot = version.IndexOf('.', firstDot + 1);
         return secondDot > 0 ? version[..secondDot] : version;
-    }
-
-    private static IEnumerable<string> Lines(string output)
-    {
-        return output
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(l => !string.IsNullOrWhiteSpace(l));
     }
 }

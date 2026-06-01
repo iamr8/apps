@@ -20,6 +20,7 @@ public sealed record PlistInfo(
     string? BundleVersion,
     string? BundleIdentifier,
     string? SparkleUrl,
-    bool HasSparkleKey,
-    string? NSExtensionPointIdentifier = null
-);
+    string? KeystoneUrl,
+    bool IsSafariExtension,
+    bool IsElectronApp,
+    PlistReader.Plist RawData);

@@ -1,6 +1,4 @@
-using apps.Checkers;
 using apps.Infrastructure;
-using apps.Scanners;
 
 using Microsoft.Extensions.DependencyInjection;
 
@@ -16,8 +14,6 @@ public static class DotnetRegistration
         services.AddCheckerClient("dotnet-releases", "https://dotnetcli.blob.core.windows.net", 4);
 
         services.AddSingleton<IScanner, DotnetScanner>();
-        services.AddSingleton<IUpdateChecker, DotnetReleasesChecker>();
-        services.AddSingleton<IUpdateChecker, NugetRegistryChecker>();
         return services;
     }
 }

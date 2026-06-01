@@ -31,19 +31,9 @@ public sealed class ProjectManifestFinder(ILogger<ProjectManifestFinder> logger)
     };
 
     /// <summary>
-    /// Yields the absolute paths of all manifest files that match
-    /// <paramref name="fileNamePattern"/> under the user's home directory.
-    /// </summary>
-    public IAsyncEnumerable<string> FindAsync(string fileNamePattern, CancellationToken cancellationToken = default)
-    {
-        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return WalkAsync(homeDir, fileNamePattern, cancellationToken);
-    }
-
-    /// <summary>
     /// Yields manifest file paths under <paramref name="root"/>.
     /// </summary>
-    public async IAsyncEnumerable<string> WalkAsync(string root, string fileNamePattern, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<string> FindAsync(string root, string fileNamePattern, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var stack = new Stack<string>();
         stack.Push(root);

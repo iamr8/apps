@@ -1,9 +1,11 @@
-using System.Diagnostics.CodeAnalysis;
+using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text.Json.Serialization;
+using System.Threading.Channels;
 
 using apps.Infrastructure;
-using apps.Scanners;
 using apps.Models;
 
 using Microsoft.Extensions.Logging;
@@ -11,21 +13,20 @@ using Microsoft.Extensions.Logging;
 namespace apps.Components.Docker;
 
 /// <summary>
-/// Discovers local Docker images via <c>docker images</c>.
-/// One <see cref="AppKind.Packages"/> entry is emitted per unique repository:tag pair.
-/// <see cref="DiscoveredApp.Name"/> is the full <c>repo:tag</c> reference (e.g. <c>postgres:18</c>)
-/// so that each image has a unique identity key throughout the pipeline.
-/// <see cref="DiscoveredApp.InstalledVersion"/> is the tag (e.g. <c>18</c>) and is shown
-/// in the version column; the renderer strips the tag suffix from the name for display.
-/// <see cref="DiscoveredApp.Digest"/> holds the sha256 so <see cref="Checkers.DockerHubChecker"/>
-/// can detect content changes behind a stable tag.
-/// Images with no registry digest (locally built) are skipped.
-/// The full image reference is also stored in <see cref="DiscoveredApp.SuggestedMethodDetail"/>.
+/// Discovers local Docker images via <c>docker images</c> and checks each image's tag
+/// against Docker Hub to detect content changes behind a stable tag.
+/// One <see cref="AppKind.DevTool"/> entry is emitted per unique repository:tag pair.
+/// Images with no registry digest (locally built) or from private registries are skipped.
 /// </summary>
-public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImageScanner> logger)
+public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory httpClientFactory, ILogger<DockerImageScanner> logger)
     : IScanner
 {
+    private static readonly string PreferredArch =
+        RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "amd64";
+
     private string? _executablePath;
+
+    public int Order => 5;
 
     public string Name => "Docker";
 
@@ -33,58 +34,20 @@ public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImag
     public string DisplayName => "Docker";
 
     public OS SupportedOS => OS.MacOS | OS.Windows;
-
-    /// <inheritdoc/>
-    public string? GetSourceQualifier(AppKind kind) => "Image";
+    public AppKind Kind => AppKind.DevTool;
 
     public bool IsAvailable()
     {
-        // TODO: needs fix on Windows
         _executablePath = ScannerHelper.FindExecutable("docker");
-        if (_executablePath is not null)
-        {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
-            // Honour DOCKER_HOST when it points to a Unix socket — the docker binary uses it
-            // and we should probe the same path the client will actually connect to.
-            var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
-            if (dockerHost?.StartsWith("unix://", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                var socketPath = dockerHost["unix://".Length..];
-                if (!string.IsNullOrWhiteSpace(socketPath) && IsSocketListening(socketPath))
-                {
-                    return true;
-                }
-            }
-
-            string[] knownSockets =
-            [
-                "/var/run/docker.sock",
-                Path.Combine(home, ".docker", "run", "docker.sock"),
-                Path.Combine(home, ".orbstack", "run", "docker.sock"),
-                Path.Combine(home, "Library", "Containers", "com.docker.docker", "Data", "docker.raw.sock")
-            ];
-
-            // File.Exists alone is unreliable: the socket file may persist after the daemon
-            // stops (OrbStack and Docker Desktop both leave socket paths behind). Actually
-            // connecting to the socket is a zero-overhead probe that is definitively correct.
-            if (knownSockets.Any(IsSocketListening))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return _executablePath is not null;
     }
 
     /// <inheritdoc/>
     public bool StripTagFromDisplayName => true;
 
+    /// <inheritdoc/>
     public async IAsyncEnumerable<DiscoveredApp> ScanAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Use | as the column delimiter — it cannot appear in repository names, tags, or
-        // digests (sha256:…). The original \t approach broke because Process passes \t as
-        // the two characters '\' and 't', not a real tab, while the C# split used '\t' (tab).
         const string format = @"--format {{.Repository}}|{{.Tag}}|{{.Digest}}|{{.ID}}";
         var result = await runner.RunAsync(_executablePath!, $"images {format}", cancellationToken);
 
@@ -106,6 +69,93 @@ public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImag
         }
     }
 
+    /// <inheritdoc/>
+    public async IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (apps.Length == 0)
+        {
+            yield break;
+        }
+
+        await foreach (var item in apps.WhenAll<AppRecord, (AppRecord Record, bool Error)>(CheckImageAsync, cancellationToken: cancellationToken))
+        {
+            yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Compares the locally stored sha256 digest against the remote digest from Docker Hub.
+    /// </summary>
+    private async Task CheckImageAsync(
+        AppRecord record,
+        ChannelWriter<(AppRecord Record, bool Error)> writer,
+        CancellationToken cancellationToken)
+    {
+        var imageRef = record.App.UpdateMethodDetail;
+        if (string.IsNullOrWhiteSpace(imageRef))
+        {
+            await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!TryParseImageRef(imageRef, out var ns, out var repo, out var tag))
+        {
+            await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            using var client = httpClientFactory.CreateClient("dockerhub");
+            var tagInfo = await client
+                .GetFromJsonAsync(
+                    $"/v2/repositories/{ns}/{repo}/tags/{tag}",
+                    DockerJsonContext.Default.DockerTagInfo,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var remoteDigest = tagInfo?.Digest;
+
+            if (string.IsNullOrWhiteSpace(remoteDigest))
+            {
+                remoteDigest = tagInfo?.Images?
+                    .FirstOrDefault(img =>
+                        string.Equals(img.Os, "linux", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(img.Architecture, PreferredArch, StringComparison.OrdinalIgnoreCase))
+                    ?.Digest;
+            }
+
+            if (string.IsNullOrWhiteSpace(remoteDigest))
+            {
+                remoteDigest = tagInfo?.Images?
+                    .FirstOrDefault(img => string.Equals(img.Os, "linux", StringComparison.OrdinalIgnoreCase))
+                    ?.Digest;
+            }
+
+            if (string.IsNullOrWhiteSpace(remoteDigest))
+            {
+                await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var localDigest = record.App.Digest;
+            if (!string.IsNullOrWhiteSpace(localDigest)
+                && localDigest.StartsWith("sha256:", StringComparison.Ordinal)
+                && !string.Equals(localDigest, remoteDigest, StringComparison.Ordinal))
+            {
+                record.App.LatestVersion = remoteDigest;
+            }
+
+            await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Docker Hub check failed for {Image}",
+                imageRef);
+            await writer.WriteAsync((record, true), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private DiscoveredApp? ParseLine(string line, HashSet<string> seen)
     {
         var parts = line.Split('|', 4);
@@ -117,7 +167,6 @@ public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImag
         var repo = parts[0].Trim();
         var tag = parts[1].Trim();
 
-        // Skip untagged / intermediate images
         if (repo == "<none>" || tag == "<none>")
         {
             return null;
@@ -126,45 +175,89 @@ public sealed class DockerImageScanner(IProcessRunner runner, ILogger<DockerImag
         var imageRef = $"{repo}:{tag}";
         if (!seen.Add(imageRef))
         {
-            return null; // deduplicate
+            return null;
         }
 
         var digest = parts[2].Trim() is { Length: > 0 } d && d != "<none>" ? d : null;
 
-        // Skip locally-built images — they have no registry digest to compare against.
         if (digest is null)
         {
             return null;
         }
 
-        return new DiscoveredApp(
+        return new DiscoveredApp(this,
             imageRef,
             new AppIdentifier(Name, DisplayName, "Image"),
-            AppKind.Packages,
-            tag,
-            SuggestedMethod: UpdateMethod.Specialised,
-            SuggestedMethodDetail: imageRef,
-            Digest: digest);
+            AppKind.DevTool)
+        {
+            InstalledVersion = tag,
+            Digest = digest,
+            UpdateMethod = UpdateMethod.Specialised,
+            UpdateMethodDetail = imageRef,
+        };
     }
 
     /// <summary>
-    /// Tries to open a connection to a Unix domain socket.
-    /// Returns <see langword="true"/> when the daemon is accepting connections, <see langword="false"/> otherwise.
-    /// The connect call is synchronous but completes in microseconds for local sockets.
-    /// Skips the <c>File.Exists</c> pre-check — socket files are special filesystem entries
-    /// that may not report correctly through <c>File.Exists</c> on all platforms.
+    /// Splits an image reference into its Hub namespace, repository, and tag.
+    /// Returns false for private-registry references (host contains a '.' or ':').
     /// </summary>
-    private static bool IsSocketListening(string path)
+    private static bool TryParseImageRef(string imageRef, out string ns, out string repo, out string tag)
     {
-        try
+        ns = repo = tag = string.Empty;
+
+        var colonIdx = imageRef.LastIndexOf(':');
+        var imageNoTag = colonIdx > 0 ? imageRef[..colonIdx] : imageRef;
+        tag = colonIdx > 0 ? imageRef[(colonIdx + 1)..] : "latest";
+
+        var slashIdx = imageNoTag.IndexOf('/');
+
+        if (slashIdx < 0)
         {
-            using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-            socket.Connect(new UnixDomainSocketEndPoint(path));
-            return true;
+            ns = "library";
+            repo = imageNoTag;
+            return !string.IsNullOrWhiteSpace(repo);
         }
-        catch
+
+        var possibleHost = imageNoTag[..slashIdx];
+
+        if (possibleHost.Contains('.') || possibleHost.Contains(':'))
         {
             return false;
         }
+
+        ns = possibleHost;
+        repo = imageNoTag[(slashIdx + 1)..];
+        return !string.IsNullOrWhiteSpace(ns) && !string.IsNullOrWhiteSpace(repo);
     }
 }
+
+internal sealed class DockerTagInfo
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// Manifest list (multi-arch index) digest — matches what <c>docker images</c> reports locally.
+    /// </summary>
+    [JsonPropertyName("digest")]
+    public string? Digest { get; init; }
+
+    [JsonPropertyName("images")]
+    public DockerImageInfo[]? Images { get; init; }
+}
+
+internal sealed class DockerImageInfo
+{
+    [JsonPropertyName("architecture")]
+    public string? Architecture { get; init; }
+
+    [JsonPropertyName("os")]
+    public string? Os { get; init; }
+
+    [JsonPropertyName("digest")]
+    public string? Digest { get; init; }
+}
+
+[JsonSerializable(typeof(DockerTagInfo))]
+internal sealed partial class DockerJsonContext : JsonSerializerContext;
+

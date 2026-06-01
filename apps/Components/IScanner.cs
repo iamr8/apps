@@ -1,8 +1,6 @@
-using System.Diagnostics.CodeAnalysis;
-
 using apps.Models;
 
-namespace apps.Scanners;
+namespace apps.Components;
 
 /// <summary>
 /// A discovery plugin that finds installed applications, runtimes, or packages.
@@ -17,7 +15,8 @@ public interface IScanner
     string DisplayName { get; }
 
     OS SupportedOS { get; }
-
+    AppKind Kind { get; }
+    
     bool IsAvailable();
 
     /// <summary>
@@ -32,4 +31,6 @@ public interface IScanner
     /// do not buffer the entire result set before returning.
     /// </summary>
     IAsyncEnumerable<DiscoveredApp> ScanAsync(CancellationToken cancellationToken = default);
+
+    IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, CancellationToken cancellationToken = default);
 }

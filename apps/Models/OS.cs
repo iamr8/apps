@@ -1,8 +1,9 @@
 ﻿namespace apps.Models;
 
 [Flags]
-public enum OS
+public enum OS : byte
 {
-    MacOS = 0,
-    Windows = 1,
+    None = 0,
+    MacOS = 1,
+    Windows = 2,
 }

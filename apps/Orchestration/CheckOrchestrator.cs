@@ -1,6 +1,4 @@
-using System.Threading.Channels;
-
-using apps.Checkers;
+using apps.Components;
 using apps.Infrastructure;
 using apps.Models;
 
@@ -17,98 +15,54 @@ namespace apps.Orchestration;
 /// Results print to the terminal as each check completes — no waiting for
 /// the full batch.
 /// </summary>
-public sealed class CheckOrchestrator(IEnumerable<IUpdateChecker> checkers, LiveProgressRenderer renderer, ILogger<CheckOrchestrator> logger)
+public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgressRenderer renderer, ILogger<CheckOrchestrator> logger)
 {
-    private const int ResultChannelCapacity = 256;
-
     /// <summary>
     /// Groups apps by update method, fans out all checkers concurrently, applies results
     /// back to the <see cref="AppRecord"/> objects in-memory, and streams progress to the terminal.
     /// Returns a (total, updates, errors) summary tuple.
     /// </summary>
-    public async Task<(int Total, int Updates, int Errors)> InvokeAsync(IReadOnlyList<AppRecord> apps, CancellationToken cancellationToken = default)
+    public async Task<(int Total, int Updates, int Errors)> CheckAsync(IReadOnlyList<AppRecord> apps, CancellationToken cancellationToken = default)
     {
-        var checkersByMethod = checkers
-            .GroupBy(c => c.Method)
-            .ToDictionary(g => g.Key, g => g.ToList());
-
-        var grouped = apps
-            .Where(a => a is { UpdateMethod: not null, IsPinned: false })
-            .GroupBy(a => a.UpdateMethod!.Value)
-            .ToDictionary(g => g.Key, g => (IReadOnlyList<AppRecord>)[..g]);
-
-        if (grouped.Count == 0)
+        var appGroups = new List<(IScanner Scanner, AppRecord[] Apps)>();
+        foreach (var scanner in scanners)
         {
-            logger.LogInformation("No apps with resolved update methods found");
-            return (0, 0, 0);
+            var scannerApps = apps.Where(c => c.App.Source.Name == scanner.Name);
+            var allApps = scannerApps
+                .Concat(scannerApps.Where(c => c.SubApps?.Any() == true).SelectMany(c => c.SubApps!))
+                .ToDictionary(c => c);
+            var groupedByScanner = allApps.Where(c => scanner.Kind.HasFlag(c.Value.App.Kind)).Select(c => c.Value).ToArray();
+            if (groupedByScanner.Length == 0)
+            {
+                continue;
+            }
+
+            appGroups.Add((scanner, groupedByScanner));
         }
 
-        // Build a lookup so results can be applied back to ALL records with the same name.
-        var recordsByName = apps
-            .GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
-
-        var resultChannel = Channel.CreateBounded<UpdateCheckResult>(new BoundedChannelOptions(ResultChannelCapacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = false
-        });
-
-        var checkGroups = grouped
-            .Where(kv => checkersByMethod.ContainsKey(kv.Key))
-            .SelectMany(kv => checkersByMethod[kv.Key].Select(checker =>
-            {
-                var eligible = kv.Value.Where(checker.CanCheck).ToList();
-                return (eligible, checker, method: kv.Key);
-            }))
-            .ToList();
-
-        var totalToCheck = checkGroups.Sum(g => g.eligible.Count);
+        var totalToCheck = appGroups.Sum(g => g.Apps.Length);
         renderer.SetCheckTotal(totalToCheck);
 
         // Periodic timer to refresh the check progress line with updated elapsed time
         using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var timerTask = renderer.RunCheckTimerAsync(timerCts.Token);
 
-        var checkTasks = checkGroups
-            .Select(g => CheckGroupAsync(g.method, g.eligible, g.checker, resultChannel.Writer, cancellationToken))
-            .ToList();
-
-        _ = Task.WhenAll(checkTasks)
-            .ContinueWith(t =>
-            {
-                _ = t.Exception;
-                resultChannel.Writer.TryComplete();
-            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-
         int total = 0, errors = 0;
-
-        await foreach (var result in resultChannel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        var checkedApps = new List<AppRecord>();
+        foreach (var (scanner, scannerApps) in appGroups)
         {
-            total++;
-
-            if (result.Error is not null)
+            await foreach (var (app, error) in scanner.CheckAsync(scannerApps, cancellationToken))
             {
-                errors++;
-            }
+                total++;
 
-            if (recordsByName.TryGetValue(result.AppName, out var records))
-            {
-                foreach (var record in records)
+                if (error)
                 {
-                    record.UpdateAvailable = result.UpdateAvailable;
-                    record.LatestVersion = result.LatestVersion;
-                    record.LastCheckError = result.Error;
-
-                    if (result.InstalledVersion is not null)
-                    {
-                        record.InstalledVersion = result.InstalledVersion;
-                    }
+                    errors++;
                 }
-            }
 
-            renderer.RenderCheckActive(total);
+                checkedApps.Add(app);
+                renderer.RenderCheckActive(total);
+            }
         }
 
         await timerCts.CancelAsync().ConfigureAwait(false);
@@ -120,56 +74,12 @@ public sealed class CheckOrchestrator(IEnumerable<IUpdateChecker> checkers, Live
         {
         }
 
-        // Count unique non-system apps with available updates (matches the final summary logic)
-        var uniqueUpdates = apps
-            .Where(a => a.Kind != AppKind.SystemApp && a.UpdateAvailable)
-            .Select(a => a.Name)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-
-        renderer.RenderCheckComplete(total, uniqueUpdates, errors);
+        var updates = checkedApps.Count(c => c.UpdateAvailable);
+        renderer.RenderCheckComplete(total, updates, errors);
         logger.LogInformation(
             "Check complete: {Total} checked, {Updates} updates, {Errors} errors",
-            total, uniqueUpdates, errors);
+            total, updates, errors);
 
-        return (total, uniqueUpdates, errors);
-    }
-
-    private async Task CheckGroupAsync(UpdateMethod method, List<AppRecord> apps, IUpdateChecker checker, ChannelWriter<UpdateCheckResult> writer, CancellationToken cancellationToken)
-    {
-        if (apps.Count == 0)
-        {
-            return;
-        }
-
-        logger.LogDebug("Checking {Count} apps via {Method}", apps.Count, method);
-
-        try
-        {
-            await foreach (var result in checker.CheckStreamAsync(apps, cancellationToken).ConfigureAwait(false))
-            {
-                await writer.WriteAsync(result, cancellationToken);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Checker {Method} failed", method);
-
-            foreach (var app in apps)
-            {
-                var errResult = new UpdateCheckResult(
-                    app.Name, method,
-                    false,
-                    app.InstalledVersion,
-                    null,
-                    ex.Message);
-
-                await writer.WriteAsync(errResult, cancellationToken);
-            }
-        }
+        return (total, updates, errors);
     }
 }

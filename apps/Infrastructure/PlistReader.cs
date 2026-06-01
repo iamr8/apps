@@ -1,7 +1,10 @@
+using System.Collections;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Xml;
 
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 
 namespace apps.Infrastructure;
 
@@ -40,7 +43,7 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
                 return null;
             }
 
-            return ParseXmlPlist(xml);
+            return ParseXmlPlist(appBundlePath, xml);
         }
         catch (Exception ex)
         {
@@ -126,97 +129,295 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
         return await stdoutTask;
     }
 
-    private static PlistInfo ParseXmlPlist(string xml)
+    private static PlistInfo ParseXmlPlist(string appBundlePath, string xml)
     {
         var doc = new XmlDocument();
         doc.LoadXml(xml);
 
         // Apple XML plist schema: <plist><dict><key>…</key><string>…</string>…</dict></plist>
-        var dict = doc.SelectSingleNode("/plist/dict") ?? throw new FormatException("No top-level <dict> in plist");
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(xml));
 
-        var pairs = ExtractKeyValuePairs(dict);
+        var dict = doc.SelectSingleNode("/plist") ?? throw new FormatException("No top-level <dict> in plist");
+        var plist = Plist.Parse(dict);
 
-        var displayName = GetString(pairs, "CFBundleDisplayName") ?? GetString(pairs, "CFBundleName");
-        var shortVersion = GetString(pairs, "CFBundleShortVersionString");
-        var bundleVersion = GetString(pairs, "CFBundleVersion");
-        var bundleId = GetString(pairs, "CFBundleIdentifier");
-        var sparkleUrl = GetString(pairs, "SUFeedURL");
-        var hasSparkleKey = pairs.ContainsKey("SUPublicEDKey") || pairs.ContainsKey("SUPublicDSAKeyFile");
-
-        string? nsExtPointId = null;
-        var nsExtDict = FindChildDict(dict, "NSExtension");
-        if (nsExtDict is not null)
+        var displayName = plist.TryGetValue("CFBundleDisplayName", out var bdn)
+            ? bdn.GetString()
+            : plist.TryGetValue("CFBundleName", out var bn)
+                ? bn.GetString()
+                : null;
+        var shortVersion = plist.GetString("CFBundleShortVersionString");
+        var bundleVersion = plist.GetString("CFBundleVersion");
+        var bundleId = plist.GetString("CFBundleIdentifier");
+        var sparkleUrl = plist.GetString("SUFeedURL");
+        var isElectronApp = plist.ContainsKey("ElectronAsarIntegrity");
+        var googleKeystoneUrl = plist.GetString("KSUpdateURL");
+        var isSafariExtension = false;
+        if (plist.TryGetValue("NSExtension", out var ext))
         {
-            var nsExtPairs = ExtractKeyValuePairs(nsExtDict);
-            nsExtPointId = GetString(nsExtPairs, "NSExtensionPointIdentifier");
+            var nsExtPointId = ext.GetString("NSExtensionPointIdentifier");
+            if (nsExtPointId is "com.apple.Safari.extension" or "com.apple.Safari.web-extension")
+            {
+                isSafariExtension = true;
+            }
         }
+        else
+        {
+            isSafariExtension = plist.ContainsKey("SFSafariWebExtensionConverterVersion");
+        }
+        
+        // TODO: check if built by DevMate
+        // TODO: check if iOS App Bundle
 
-        return new PlistInfo(displayName, shortVersion, bundleVersion, bundleId, sparkleUrl, hasSparkleKey, nsExtPointId);
+        return new PlistInfo(displayName, shortVersion, bundleVersion, bundleId, sparkleUrl, googleKeystoneUrl, isSafariExtension, isElectronApp, plist);
     }
 
-    private static Dictionary<string, string?> ExtractKeyValuePairs(XmlNode dict)
+    [DebuggerDisplay("{GetDebuggerDisplay(),nq}")]
+    public class Plist : IEnumerable<KeyValuePair<string, Plist>>
     {
-        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var nodes = dict.ChildNodes;
-        var i = 0;
+        private readonly Dictionary<string, Plist>? _dictionary;
+        private readonly List<Plist>? _array;
+        private readonly decimal? _numberValue;
+        private readonly bool? _booleanValue;
+        private readonly string? _stringValue;
 
-        while (i < nodes.Count)
+        [MemberNotNullWhen(true, nameof(_array))]
+        private bool IsArray { get; }
+
+        [MemberNotNullWhen(true, nameof(_dictionary))]
+        private bool IsDictionary { get; }
+
+        [MemberNotNullWhen(true, nameof(_stringValue))]
+        private bool IsString { get; }
+
+        [MemberNotNullWhen(true, nameof(_numberValue))]
+        private bool IsNumber { get; }
+
+        [MemberNotNullWhen(true, nameof(_booleanValue))]
+        private bool IsBoolean { get; }
+
+        private Plist(Dictionary<string, Plist> dictionary)
         {
-            var keyNode = nodes[i];
-            if (keyNode?.Name != "key")
+            _dictionary = dictionary;
+            IsDictionary = true;
+        }
+
+        private Plist(List<Plist> array)
+        {
+            _array = array;
+            IsArray = true;
+        }
+
+        private Plist(string @string)
+        {
+            _stringValue = @string;
+            IsString = true;
+        }
+
+        private Plist(bool value)
+        {
+            _booleanValue = value;
+            IsBoolean = true;
+        }
+
+        private Plist(decimal value)
+        {
+            _numberValue = value;
+            IsNumber = true;
+        }
+
+        /// <summary>
+        /// Parses an XML node into a structured <see cref="Plist"/> tree.
+        /// Supports <c>&lt;plist&gt;</c>, <c>&lt;dict&gt;</c>, <c>&lt;array&gt;</c>,
+        /// <c>&lt;string&gt;</c>, <c>&lt;integer&gt;</c>, <c>&lt;real&gt;</c>,
+        /// <c>&lt;true/&gt;</c>, and <c>&lt;false/&gt;</c> elements.
+        /// </summary>
+        public static Plist? Parse(XmlNode node)
+        {
+            try
             {
-                i++;
-                continue;
+                return ParseNode(node) as Plist;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Failed to parse plist XML: {e}");
+                return null;
+            }
+        }
+
+        public string? GetString(string? key = null)
+        {
+            if (key is not null && _dictionary is not null)
+            {
+                return _dictionary.TryGetValue(key, out var value) ? value.GetString() : null;
             }
 
-            var key = keyNode.InnerText;
-            var valueNode = nodes[i + 1];
+            return IsString ? _stringValue : throw new InvalidOperationException("Plist value is not a string");
+        }
 
-            if (valueNode is not null)
+        public decimal GetNumber(string? key = null)
+        {
+            if (key is not null && _dictionary is not null)
             {
-                result[key] = valueNode.Name switch
+                return _dictionary.TryGetValue(key, out var value) ? value.GetNumber() : throw new KeyNotFoundException($"Key not found: {key}");
+            }
+
+            return IsNumber ? _numberValue.Value : throw new InvalidOperationException("Plist value is not a number");
+        }
+
+        public bool GetBoolean(string? key = null)
+        {
+            if (key is not null && _dictionary is not null)
+            {
+                return _dictionary.TryGetValue(key, out var value) ? value.GetBoolean() : throw new KeyNotFoundException($"Key not found: {key}");
+            }
+
+            return IsBoolean ? _booleanValue.Value : throw new InvalidOperationException("Plist value is not a boolean");
+        }
+
+        /// <summary>
+        /// Gets the number of elements in the array, or 0 if not an array.
+        /// </summary>
+        public int Count => _array?.Count ?? _dictionary?.Count ?? 0;
+
+        /// <summary>
+        /// Attempts to get the value associated with the specified key.
+        /// </summary>
+        public bool TryGetValue(string key, out Plist? value)
+        {
+            if (_dictionary is not null)
+            {
+                return _dictionary.TryGetValue(key, out value);
+            }
+
+            value = null;
+            return false;
+        }
+
+        /// <summary>
+        /// Returns whether the dictionary contains the specified key.
+        /// </summary>
+        public bool ContainsKey(string key) => _dictionary?.ContainsKey(key) ?? false;
+
+        public IEnumerator<KeyValuePair<string, Plist>> GetEnumerator()
+        {
+            return (_dictionary ?? new Dictionary<string, Plist>()).GetEnumerator();
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        private static Plist ParseNode(XmlNode node)
+        {
+            return node.Name switch
+            {
+                "plist" => ParsePlistRoot(node),
+                "dict" => ParseDict(node),
+                "array" => ParseArray(node),
+                "string" => new Plist(node.InnerText),
+                "true" => new Plist(true),
+                "false" => new Plist(false),
+                "integer" or "real" => new Plist(decimal.Parse(node.InnerText)),
+                "data" or "date" => new Plist(node.InnerText),
+                _ => throw new FormatException($"Unsupported plist value type: <{node.Name}>")
+            };
+        }
+
+        private static Plist ParsePlistRoot(XmlNode plistNode)
+        {
+            foreach (XmlNode child in plistNode.ChildNodes)
+            {
+                if (child.Name is "dict" or "array")
                 {
-                    "string" => valueNode.InnerText,
-                    "true" => "true",
-                    "false" => "false",
-                    "integer" or "real" => valueNode.InnerText,
-                    _ => null
-                };
+                    return (Plist)ParseNode(child);
+                }
             }
 
-            i += 2;
+            throw new FormatException("No <dict> or <array> found inside <plist>");
         }
 
-        return result;
-    }
-
-    private static string? GetString(Dictionary<string, string?> pairs, string key)
-    {
-        return pairs.GetValueOrDefault(key);
-    }
-
-    /// <summary>
-    /// Finds the child <c>&lt;dict&gt;</c> node that immediately follows a <c>&lt;key&gt;</c>
-    /// node with the given name inside <paramref name="dict"/>.
-    /// Returns <see langword="null"/> when the key is absent or its value is not a <c>&lt;dict&gt;</c>.
-    /// </summary>
-    private static XmlNode? FindChildDict(XmlNode dict, string key)
-    {
-        var nodes = dict.ChildNodes;
-        var i = 0;
-
-        while (i < nodes.Count)
+        private static Plist ParseDict(XmlNode dictNode)
         {
-            var keyNode = nodes[i];
-            if (keyNode?.Name == "key" && keyNode.InnerText == key && i + 1 < nodes.Count)
+            var output = new Dictionary<string, Plist>(StringComparer.Ordinal);
+            var nodes = dictNode.ChildNodes;
+            var i = 0;
+
+            while (i < nodes.Count)
             {
-                var valueNode = nodes[i + 1];
-                return valueNode?.Name == "dict" ? valueNode : null;
+                var keyNode = nodes[i];
+                if (keyNode is null)
+                {
+                    break;
+                }
+
+                if (keyNode.Name != "key")
+                {
+                    i++;
+                    continue;
+                }
+
+                var key = keyNode.InnerText;
+                i++;
+
+                if (i >= nodes.Count)
+                {
+                    break;
+                }
+
+                var valueNode = nodes[i];
+                if (valueNode is null)
+                {
+                    break;
+                }
+
+                output[key] = ParseNode(valueNode);
+                i++;
             }
 
-            i++;
+            return new Plist(output);
         }
 
-        return null;
+        private static Plist ParseArray(XmlNode arrayNode)
+        {
+            var items = new List<Plist>();
+
+            foreach (XmlNode child in arrayNode.ChildNodes)
+            {
+                if (child.NodeType == XmlNodeType.Element)
+                {
+                    items.Add(ParseNode(child));
+                }
+            }
+
+            return new Plist(items);
+        }
+
+        public string GetDebuggerDisplay()
+        {
+            if (this.IsDictionary)
+            {
+                return $"dict with {this.Count} entries";
+            }
+
+            if (this.IsArray)
+            {
+                return $"array with {this.Count} items";
+            }
+
+            if (this.IsString)
+            {
+                return $"{this._stringValue}";
+            }
+
+            if (this.IsNumber)
+            {
+                return $"{this._numberValue}";
+            }
+
+            if (this.IsBoolean)
+            {
+                return $"{this._booleanValue}";
+            }
+
+            return "null";
+        }
     }
 }

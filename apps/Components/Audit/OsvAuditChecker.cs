@@ -1,7 +1,8 @@
-using System.Net.Http.Json;
+using System.Net;
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Threading.Channels;
 
+using apps.Infrastructure;
 using apps.Models;
 
 using Microsoft.Extensions.Logging;
@@ -12,159 +13,240 @@ namespace apps.Components.Audit;
 /// Queries the OSV.dev API to find known CVEs for discovered packages.
 /// Supports NuGet, npm, Go, and PyPI ecosystems.
 /// </summary>
-public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, ILogger<OsvAuditChecker> logger)
+public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, LiveProgressRenderer renderer, ILogger<OsvAuditChecker> logger)
 {
-    private const string OsvApiUrl = "https://api.osv.dev/v1/querybatch";
-    private const int BatchSize = 100;
-
     /// <summary>
     /// Audits all provided app records against OSV.dev for known vulnerabilities.
     /// Returns only records that have at least one vulnerability.
     /// </summary>
-    public async Task<IReadOnlyList<AuditResult>> AuditAsync(
-        IReadOnlyList<AppRecord> apps,
-        Action<int, int>? onProgress = null,
-        CancellationToken cancellationToken = default)
+    public async Task AuditAsync(IReadOnlyList<AppRecord> apps, CancellationToken cancellationToken = default)
     {
-        var auditable = apps
-            .Where(a => a.InstalledVersion is not null)
-            .Where(a => MapEcosystem(a) is not null)
+        var auditableApps = apps
+            .Where(c => c.App.OsvEcosystem == OsvEcosystemName.None)
             .ToArray();
-
-        if (auditable.Length == 0)
+        if (auditableApps.Length == 0)
         {
-            return [];
+            return;
         }
 
-        var batches = auditable.Chunk(BatchSize).ToArray();
+        renderer.SetAuditTotal(auditableApps.Length);
+        using var auditTimerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var auditTimerTask = renderer.RunAuditTimerAsync(auditTimerCts.Token);
+        var auditBatchTotal = 1;
+
         var results = new List<AuditResult>();
         var completed = 0;
 
-        foreach (var batch in batches)
+        await foreach (var result in auditableApps.WhenAll<AppRecord, AuditResult>(QueryAsync, cancellationToken: cancellationToken))
         {
-            var batchResults = await QueryBatchAsync(batch, cancellationToken).ConfigureAwait(false);
-            results.AddRange(batchResults);
-            completed++;
-            onProgress?.Invoke(completed, batches.Length);
+            results.Add(result);
+            auditBatchTotal = apps.Count;
+            renderer.RenderAuditProgress(++completed, apps.Count);
         }
 
-        return results;
+        await auditTimerCts.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await auditTimerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        renderer.RenderAuditComplete(auditBatchTotal, results.Count(c => c.Vulnerabilities.Length > 0));
     }
 
-    private async Task<IReadOnlyList<AuditResult>> QueryBatchAsync(
-        AppRecord[] batch,
-        CancellationToken cancellationToken)
+    private async Task QueryAsync(AppRecord record, ChannelWriter<AuditResult> writer, CancellationToken cancellationToken)
     {
-        var queries = batch.Select(app => new OsvQuery
+        var request = new OsvQuery
         {
             Package = new OsvPackage
             {
-                Name = GetPackageName(app),
-                Ecosystem = MapEcosystem(app)!
+                Name = GetPackageName(record),
+                Ecosystem = MapEcosystem(record)!
             },
-            Version = app.InstalledVersion!
-        }).ToArray();
-
-        var request = new OsvBatchRequest { Queries = queries };
+            Version = record.App.InstalledVersion!
+        };
 
         try
         {
             using var client = httpClientFactory.CreateClient("osv");
-
-            var response = await client.PostAsJsonAsync(
-                OsvApiUrl,
-                request,
-                OsvJsonContext.Default.OsvBatchRequest,
-                cancellationToken).ConfigureAwait(false);
-
+            var requestJson = JsonSerializer.Serialize(request, OsvJsonContext.Default.OsvQuery);
+            var stringContent = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
+            var response = await client.PostAsync("/v1/query", stringContent, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("OSV API returned {Status}", response.StatusCode);
-                return [];
+                return;
             }
 
-            var result = await response.Content
-                .ReadFromJsonAsync(OsvJsonContext.Default.OsvBatchResponse, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (result?.Results is null)
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var result = await JsonSerializer.DeserializeAsync(stream, OsvJsonContext.Default.OsvResultEntry, cancellationToken).ConfigureAwait(false);
+            if (result.Vulnerabilities is null || result.Vulnerabilities.Count == 0)
             {
-                return [];
+                await writer.WriteAsync(new AuditResult(record, []), cancellationToken).ConfigureAwait(false);
+                return;
             }
 
-            var auditResults = new List<AuditResult>();
+            // var fixedVulnerabilities = new List<OsvVulnerability>();
+            // foreach (var vulnerability in result.Vulnerabilities)
+            // {
+            //     var alias = vulnerability.Aliases is { Length: > 0 }
+            //         ? vulnerability.Aliases[0]
+            //         : vulnerability.UpstreamVulnerabilities is { Length: > 0 }
+            //             ? vulnerability.UpstreamVulnerabilities[0]
+            //             : vulnerability.Id;
+            //     var isVulnerable = await GetNistReferenceAsync(alias, request.Version, cancellationToken);
+            //     if (isVulnerable == null)
+            //     {
+            //         // Couldn't acknowledge the vulnerability, skip it.
+            //     }
+            //     else if (isVulnerable is true)
+            //     {
+            //         // Acknowledged as vulnerable, count it and continue to include in results.
+            //     }
+            //     else
+            //     {
+            //         // Acknowledged as secure, skip it.
+            //         fixedVulnerabilities.Add(vulnerability);
+            //     }
+            // }
+            //
+            // var unresolvedVulnerabilities = result.Vulnerabilities.Except(fixedVulnerabilities).ToArray();
+            // if (unresolvedVulnerabilities.Length == 0)
+            // {
+            //     logger.LogDebug("{Package} v{Version} vulnerabilities acknowledged as fixed in NIST CVE database, skipping", record.App.Name, record.App.InstalledVersion);
+            //     return;
+            // }
 
-            for (var i = 0; i < result.Results.Count && i < batch.Length; i++)
+            var vulnerabilityMatches = OsvVulnerabilityChecker.FindAffecting(result.Vulnerabilities, request.Package.Name, request.Version, request.Package.Ecosystem);
+            if (vulnerabilityMatches.Count == 0)
             {
-                var vulns = result.Results[i].Vulns;
-                if (vulns is { Count: > 0 })
+                await writer.WriteAsync(new AuditResult(record, []), cancellationToken).ConfigureAwait(false);
+                logger.LogDebug("{Package} v{Version} not detected as vulnerable in OSV response, skipping", record.App.Name, record.App.InstalledVersion);
+                return;
+            }
+
+            var vuls = vulnerabilityMatches
+                .GroupBy(c => c.Aliases.FirstOrDefault() ?? c.Id)
+                .Select(g =>
                 {
-                    auditResults.Add(new AuditResult(
-                        batch[i],
-                        vulns.Select(v => new VulnerabilityInfo(
-                            v.Id,
-                            v.Summary,
-                            MapSeverity(v))).ToArray()));
-                }
-            }
+                    var first = g.First();
+                    return new VulnerabilityInfo(g.Key, first.Summary ?? first.Details, first.Severity);
+                })
+                .ToArray();
 
-            return auditResults;
+            var auditResult = new AuditResult(record, vuls);
+            await writer.WriteAsync(auditResult, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "OSV batch query failed");
-            return [];
         }
     }
 
-    private static string GetPackageName(AppRecord app)
+    private async Task<bool?> GetNistReferenceAsync(string alias, string installedVersion, CancellationToken cancellationToken)
     {
-        if (app.UpdateMethodDetail is not null && app.UpdateMethod == UpdateMethod.PackageRegistry)
+        try
         {
-            return app.UpdateMethodDetail;
-        }
+            // Rate limit without key: 5 requests per rolling 30-second window.
+            // With a free API key (apiKey header): 50 / 30s.
+            using var client = httpClientFactory.CreateClient("nist");
+            var response = await client.GetAsync($"/rest/json/cves/2.0?cveId={alias}", cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
 
-        return app.Name;
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var nist = await JsonSerializer.DeserializeAsync<NistResponse>(stream, OsvJsonContext.Default.NistResponse, cancellationToken);
+            if (nist?.Vulnerabilities is null || nist.Vulnerabilities.Length == 0)
+            {
+                return null;
+            }
+
+            var versions = nist.Vulnerabilities
+                .Where(c => c.Cve.Configurations is not null)
+                .SelectMany(c => c.Cve.Configurations!)
+                .SelectMany(c => c.Nodes)
+                .SelectMany(c => c.CpeMatch)
+                .Where(c => c.VersionEndExcluding is not null ||
+                            c.VersionStartIncluding is not null ||
+                            c.VersionStartExcluding is not null ||
+                            c.VersionEndIncluding is not null)
+                .ToArray();
+            if (versions.Length == 0)
+            {
+                return null;
+            }
+
+            var isIncluded = versions.Any(match => (match is { VersionStartIncluding: not null, VersionEndExcluding: not null } && VersionComparer.Compare(installedVersion, match.VersionStartIncluding) >= 0 && VersionComparer.Compare(installedVersion, match.VersionEndExcluding) < 0) ||
+                                                   (match is { VersionStartIncluding: not null, VersionEndExcluding: null } && VersionComparer.Compare(installedVersion, match.VersionStartIncluding) >= 0) ||
+                                                   (match is { VersionStartIncluding: null, VersionEndExcluding: not null } && VersionComparer.Compare(installedVersion, match.VersionEndExcluding) < 0));
+            if (isIncluded)
+            {
+                // vulnerable
+                return true;
+            }
+
+            // secure
+            return false;
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e, "NIST CVE lookup failed for {Alias}", alias);
+            return null;
+        }
     }
 
-    private static string? MapEcosystem(AppRecord app)
+    private static string GetPackageName(AppRecord record)
     {
-        return app.Identifier.Name switch
+        if (record.App.UpdateMethodDetail is not null && record.App.UpdateMethod == UpdateMethod.PackageRegistry)
         {
-            "Dotnet" or "NuGet" or "NugetLocalTools" or "NugetProject" => "NuGet",
-            "npm" or "NpmProject" or "Node" => "npm",
+            return record.App.UpdateMethodDetail;
+        }
+
+        return record.App.Name;
+    }
+
+    private static string? MapEcosystem(AppRecord record)
+    {
+        return record.App.Identifier.Name switch
+        {
+            // "Dotnet" or "NuGet" or "NugetLocalTools" or "NugetProject" => "NuGet",
+            // "npm" or "NpmProject" or "Node" => "npm",
             "Go" or "GoTools" or "GoMod" => "Go",
             "SwiftPM" => "SwiftURL",
-            "Homebrew" => null,
-            _ => null
+            _ => ""
         };
     }
 
-    private static VulnerabilitySeverity MapSeverity(OsvVuln vuln)
+    private static VulnerabilitySeverity MapSeverity(OsvVulnerability vulnerability)
     {
-        if (vuln.DatabaseSpecific?.Severity is not null)
+        if (vulnerability.Severity is { Count: > 0 })
         {
-            var mapped = ParseSeverityString(vuln.DatabaseSpecific.Severity);
-            if (mapped != VulnerabilitySeverity.Unknown)
+            foreach (var entry in vulnerability.Severity)
             {
-                return mapped;
-            }
-        }
+                if (entry.Score is null)
+                {
+                    continue;
+                }
 
-        if (vuln.Severity is { Count: > 0 })
-        {
-            foreach (var entry in vuln.Severity)
-            {
-                var score = ExtractCvssScore(entry.Score);
+                if (entry.Type is not "CVSS_V3")
+                {
+                    continue;
+                }
+
+                var score = CvssV3Calculator.GetSeverityScore(entry.Score);
                 if (score >= 0)
                 {
                     return score switch
                     {
-                        >= 9.0 => VulnerabilitySeverity.Critical,
-                        >= 7.0 => VulnerabilitySeverity.High,
-                        >= 4.0 => VulnerabilitySeverity.Medium,
-                        > 0 => VulnerabilitySeverity.Low,
-                        _ => VulnerabilitySeverity.Unknown
+                        0.0 => VulnerabilitySeverity.Unknown,
+                        <= 3.9 => VulnerabilitySeverity.Low,
+                        <= 6.9 => VulnerabilitySeverity.Medium,
+                        <= 8.9 => VulnerabilitySeverity.High,
+                        _ => VulnerabilitySeverity.Critical
                     };
                 }
             }
@@ -173,140 +255,68 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, ILogge
         return VulnerabilitySeverity.Unknown;
     }
 
-    private static VulnerabilitySeverity ParseSeverityString(string severity)
+    public enum VulnStatus
     {
-        return severity.ToUpperInvariant() switch
-        {
-            "CRITICAL" => VulnerabilitySeverity.Critical,
-            "HIGH" => VulnerabilitySeverity.High,
-            "MODERATE" or "MEDIUM" => VulnerabilitySeverity.Medium,
-            "LOW" => VulnerabilitySeverity.Low,
-            _ => VulnerabilitySeverity.Unknown
-        };
+        Fixed,
+        Vulnerable,
+        Unknown,
+        NotApplicable
     }
 
-    private static double ExtractCvssScore(string? vector)
+    public static VulnStatus CheckVulnerability(OsvVulnerability vuln, string packageName, string ecosystem, string yourVersion, Func<string, string, int> versionCompare)
     {
-        if (string.IsNullOrWhiteSpace(vector))
+        if (vuln.Affected is null || vuln.Affected.Count == 0)
         {
-            return -1;
+            return VulnStatus.Unknown;
         }
 
-        // CVSS vectors end with a numeric score or contain it after the last '/' or ':'
-        // Try to parse common patterns like "CVSS:3.1/AV:N/.../Score:7.5" or just "7.5"
-        var lastSlash = vector.LastIndexOf('/');
-        if (lastSlash >= 0 && lastSlash < vector.Length - 1)
+        var matches = vuln.Affected
+            .Where(a => a.Package.Name == packageName && (ecosystem == "" || a.Package.Ecosystem == ecosystem))
+            .ToArray();
+
+        if (matches.Length == 0)
         {
-            var tail = vector[(lastSlash + 1)..];
-            if (double.TryParse(tail, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var s))
+            return VulnStatus.NotApplicable;
+        }
+
+        foreach (var affected in matches)
+        {
+            // Explicit versions list check
+            if (affected.Versions?.Contains(yourVersion) == true)
             {
-                return s;
+                return VulnStatus.Vulnerable;
+            }
+
+            // Walk events
+            var vulnerable = false;
+            foreach (var range in affected.Ranges)
+            {
+                foreach (var ev in range.Events)
+                {
+                    if (ev.Introduced != null)
+                    {
+                        var introduced = ev.Introduced == "0" ? null : ev.Introduced;
+                        if (introduced == null || versionCompare(yourVersion, introduced) >= 0)
+                        {
+                            vulnerable = true;
+                        }
+                    }
+                    else if (ev.Fixed != null)
+                    {
+                        if (versionCompare(yourVersion, ev.Fixed) >= 0)
+                        {
+                            vulnerable = false;
+                        }
+                    }
+                }
+            }
+
+            if (vulnerable)
+            {
+                return VulnStatus.Vulnerable;
             }
         }
 
-        if (double.TryParse(vector, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var score))
-        {
-            return score;
-        }
-
-        return -1;
+        return VulnStatus.Fixed;
     }
 }
-
-/// <summary>Result of a CVE audit for a single package.</summary>
-public sealed class AuditResult(AppRecord App, VulnerabilityInfo[] Vulnerabilities)
-{
-    /// <summary>The app that has vulnerabilities.</summary>
-    public AppRecord App { get; } = App;
-
-    /// <summary>Known vulnerabilities — mutable so enrichment can add patched version info.</summary>
-    public VulnerabilityInfo[] Vulnerabilities { get; } = Vulnerabilities;
-}
-
-/// <summary>A single vulnerability found for a package.</summary>
-public sealed record VulnerabilityInfo(
-    string Id,
-    string? Summary,
-    VulnerabilitySeverity Severity,
-    string? PatchedVersion = null);
-
-/// <summary>Severity level of a vulnerability.</summary>
-public enum VulnerabilitySeverity
-{
-    Unknown,
-    Low,
-    Medium,
-    High,
-    Critical
-}
-
-internal sealed class OsvBatchRequest
-{
-    [JsonPropertyName("queries")]
-    public IReadOnlyList<OsvQuery> Queries { get; init; } = [];
-}
-
-internal sealed class OsvQuery
-{
-    [JsonPropertyName("package")]
-    public required OsvPackage Package { get; init; }
-
-    [JsonPropertyName("version")]
-    public required string Version { get; init; }
-}
-
-internal sealed class OsvPackage
-{
-    [JsonPropertyName("name")]
-    public required string Name { get; init; }
-
-    [JsonPropertyName("ecosystem")]
-    public required string Ecosystem { get; init; }
-}
-
-internal sealed class OsvBatchResponse
-{
-    [JsonPropertyName("results")]
-    public IReadOnlyList<OsvResultEntry> Results { get; init; } = [];
-}
-
-internal sealed class OsvResultEntry
-{
-    [JsonPropertyName("vulns")]
-    public IReadOnlyList<OsvVuln>? Vulns { get; init; }
-}
-
-internal sealed class OsvVuln
-{
-    [JsonPropertyName("id")]
-    public string Id { get; init; } = "";
-
-    [JsonPropertyName("summary")]
-    public string? Summary { get; init; }
-
-    [JsonPropertyName("severity")]
-    public IReadOnlyList<OsvSeverityEntry>? Severity { get; init; }
-
-    [JsonPropertyName("database_specific")]
-    public OsvDatabaseSpecific? DatabaseSpecific { get; init; }
-}
-
-internal sealed class OsvSeverityEntry
-{
-    [JsonPropertyName("type")]
-    public string? Type { get; init; }
-
-    [JsonPropertyName("score")]
-    public string? Score { get; init; }
-}
-
-internal sealed class OsvDatabaseSpecific
-{
-    [JsonPropertyName("severity")]
-    public string? Severity { get; init; }
-}
-
-[JsonSerializable(typeof(OsvBatchRequest))]
-[JsonSerializable(typeof(OsvBatchResponse))]
-internal sealed partial class OsvJsonContext : JsonSerializerContext;
-

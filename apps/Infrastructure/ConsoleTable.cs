@@ -75,7 +75,8 @@ public sealed class ConsoleTable<TRow>(
     public void Render(
         IReadOnlyList<TRow> rows,
         Func<TRow, int[], string?>? subtitleSelector = null,
-        Func<TRow, string?>? groupSelector = null)
+        Func<TRow, string?>? groupSelector = null,
+        Func<TRow, IReadOnlyList<TRow>?>? nestedRowsSelector = null)
     {
         if (rows.Count == 0)
         {
@@ -121,6 +122,21 @@ public sealed class ConsoleTable<TRow>(
             {
                 Console.WriteLine(subtitle);
             }
+
+            var nested = nestedRowsSelector?.Invoke(row);
+            if (nested is { Count: > 0 })
+            {
+                foreach (var child in nested)
+                {
+                    PrintNestedRow(child, widths);
+
+                    var childSubtitle = subtitleSelector?.Invoke(child, widths);
+                    if (childSubtitle is not null)
+                    {
+                        Console.WriteLine(childSubtitle);
+                    }
+                }
+            }
         }
     }
 
@@ -143,6 +159,27 @@ public sealed class ConsoleTable<TRow>(
         for (var i = 0; i < columns.Count; i++)
         {
             parts[i] = columns[i].Render(row, widths[i]);
+        }
+
+        Console.WriteLine(string.Join(separator, parts));
+    }
+
+    private void PrintNestedRow(TRow row, int[] widths)
+    {
+        const string indent = "  ├─ ";
+        var parts = new string[columns.Count];
+
+        for (var i = 0; i < columns.Count; i++)
+        {
+            if (i == 0)
+            {
+                var effectiveW = Math.Max(1, widths[i] - indent.Length);
+                parts[i] = AnsiStyle.Dim(indent) + columns[i].Render(row, effectiveW);
+            }
+            else
+            {
+                parts[i] = columns[i].Render(row, widths[i]);
+            }
         }
 
         Console.WriteLine(string.Join(separator, parts));

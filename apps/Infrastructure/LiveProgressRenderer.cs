@@ -1,10 +1,9 @@
 using System.Diagnostics;
 
-using apps.Checkers;
+using apps.Components;
 using apps.Components.Audit;
 using apps.Infrastructure.Logging;
 using apps.Models;
-using apps.Scanners;
 
 namespace apps.Infrastructure;
 
@@ -13,12 +12,9 @@ namespace apps.Infrastructure;
 /// Uses ANSI sequences when connected to a real TTY; falls back to plain text.
 /// Thread-safe: all writes use a <see cref="Lock"/>.
 /// </summary>
-public sealed class LiveProgressRenderer(
-    IEnumerable<IUpdateChecker> checkers,
-    IEnumerable<IScanner> scanners)
+public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
 {
     private readonly Lock _lock = new();
-    private readonly IReadOnlyList<IUpdateChecker> _checkers = checkers.ToArray();
 
     private readonly IReadOnlyDictionary<string, IScanner> _scanners =
         scanners
@@ -26,7 +22,6 @@ public sealed class LiveProgressRenderer(
             .ToDictionary(s => s.Name, StringComparer.Ordinal);
 
     private const string Dash = "—";
-    private const string SelfUpdateLabel = "Self Update";
 
     // Text of the current single-line status (scan or check progress).
     // Empty means no active line is displayed.
@@ -447,9 +442,9 @@ public sealed class LiveProgressRenderer(
     /// <summary>
     /// Renders a colorized summary report after the results table showing key pipeline statistics.
     /// </summary>
-    public void RenderSummary(
+    public static void RenderSummary(
         int discovered,
-        int checked_,
+        int @checked,
         int updatesAvailable,
         int pinned,
         int vulnerabilities,
@@ -461,7 +456,7 @@ public sealed class LiveProgressRenderer(
         var parts = new List<string>
         {
             AnsiStyle.Bold(discovered.ToString()) + " discovered",
-            AnsiStyle.Bold(checked_.ToString()) + " checked"
+            AnsiStyle.Bold(@checked.ToString()) + " checked"
         };
 
         if (updatesAvailable > 0)
@@ -513,7 +508,8 @@ public sealed class LiveProgressRenderer(
         BuildTable().Render(
             apps,
             subtitleSelector: (app, widths) => GetFormattedSubtitle(app, widths[0]),
-            groupSelector: app => KindGroupLabel(app.Kind));
+            groupSelector: app => KindGroupLabel(app.App.Kind),
+            nestedRowsSelector: app => app.SubApps is { Count: > 0 } ? app.SubApps : null);
     }
 
     /// <summary>
@@ -530,7 +526,7 @@ public sealed class LiveProgressRenderer(
             weight: 2f),
         new TableColumn<AppRecord>(
             "Kind",
-            static (app, w) => app.Kind.ToCliString().PadRight(w),
+            static (app, w) => app.App.Kind.ToCliString().PadRight(w),
             fixedWidth: 9),
         new TableColumn<AppRecord>(
             "Source",
@@ -550,16 +546,16 @@ public sealed class LiveProgressRenderer(
             weight: 0.75f),
     ]);
 
-    private string RenderNameCell(AppRecord app, int w)
+    private string RenderNameCell(AppRecord record, int w)
     {
-        var displayName = GetDisplayName(app);
-        var hasError = !string.IsNullOrWhiteSpace(app.LastCheckError);
-        var noVersion = string.IsNullOrWhiteSpace(app.InstalledVersion);
-        var noMethod = app.UpdateMethod is null or UpdateMethod.None;
-        var outdated = IsEffectivelyOutdated(app);
-        var hasVulns = app.Vulnerabilities is { Count: > 0 };
+        var displayName = GetDisplayName(record);
+        var hasError = !string.IsNullOrWhiteSpace(record.LastCheckError);
+        var noVersion = string.IsNullOrWhiteSpace(record.App.InstalledVersion);
+        var noMethod = record.App.UpdateMethod is null or UpdateMethod.None;
+        var outdated = IsEffectivelyOutdated(record);
+        var hasVulns = record.Vulnerabilities is { Count: > 0 };
 
-        if (app.IsPinned)
+        if (record.IsPinned)
         {
             var nameRaw = displayName.Trim();
             var pinnedSuffix = " <pinned>";
@@ -602,33 +598,33 @@ public sealed class LiveProgressRenderer(
     /// Errors are shown in red; description subtitles in dim gray; CVEs in red below description.
     /// Update commands are shown in cyan below the description for outdated apps.
     /// </summary>
-    private string? GetFormattedSubtitle(AppRecord app, int nameW)
+    private static string? GetFormattedSubtitle(AppRecord record, int nameW)
     {
-        if (!string.IsNullOrWhiteSpace(app.LastCheckError))
+        if (!string.IsNullOrWhiteSpace(record.LastCheckError))
         {
-            return AnsiStyle.Red("  " + AnsiStyle.Truncate(app.LastCheckError.Trim(), nameW - 2));
+            return AnsiStyle.Red("  " + AnsiStyle.Truncate(record.LastCheckError.Trim(), nameW - 2));
         }
 
         var lines = new List<string>();
-        var subtitle = GetSubtitle(app);
+        var subtitle = GetSubtitle(record);
 
         if (subtitle is not null)
         {
             lines.Add(AnsiStyle.Dim("  " + AnsiStyle.Truncate(subtitle.Trim(), nameW - 2)));
         }
 
-        if (IsEffectivelyOutdated(app))
+        if (IsEffectivelyOutdated(record))
         {
-            var cmd = GetUpdateCommand(app);
+            var cmd = GetUpdateCommand(record);
             if (cmd is not null)
             {
                 lines.Add(AnsiStyle.Cyan("  " + AnsiStyle.Truncate(cmd, nameW - 2)));
             }
         }
 
-        if (app.Vulnerabilities is { Count: > 0 })
+        if (record.Vulnerabilities is { Count: > 0 })
         {
-            foreach (var vuln in app.Vulnerabilities)
+            foreach (var vuln in record.Vulnerabilities)
             {
                 var severity = FormatSeverity(vuln.Severity);
                 var patchHint = vuln.PatchedVersion is not null ? $" (fix: {vuln.PatchedVersion})" : "";
@@ -659,25 +655,16 @@ public sealed class LiveProgressRenderer(
     /// Extensions: plugin/extension ID (shown under the display name).
     /// Other apps: description text (when present) under the name.
     /// </summary>
-    private string? GetSubtitle(AppRecord app)
+    private static string? GetSubtitle(AppRecord record)
     {
-        if (app.Kind == AppKind.Extension)
+        if (record.App.Description is not null)
         {
-            // VS Code: Description = display name, Name = extensionId → show Name as subtitle.
-            if (!string.IsNullOrEmpty(app.Description))
-            {
-                return app.Name;
-            }
-
-            // JetBrains: Name = display name, UpdateMethodDetail = plugin ID.
-            if (!string.IsNullOrEmpty(app.UpdateMethodDetail) && app.UpdateMethodDetail != app.Name)
-            {
-                return app.UpdateMethodDetail;
-            }
+            return record.App.Description;
         }
-        else if (!string.IsNullOrEmpty(app.Description))
+
+        if (record.App.PackageId is not null && !record.App.Name.Equals(record.App.PackageId, StringComparison.OrdinalIgnoreCase))
         {
-            return app.Description;
+            return record.App.PackageId;
         }
 
         return null;
@@ -722,30 +709,30 @@ public sealed class LiveProgressRenderer(
     ///   <item>Scanner display name with no qualifier (fallback for Specialised/PackageRegistry/Sdk checkers).</item>
     /// </list>
     /// </summary>
-    private (string label, string? qualifier) GetSourceParts(AppRecord app)
+    private (string label, string? qualifier) GetSourceParts(AppRecord record)
     {
         // 1. Scanner-owned qualifier always wins (handles Docker, NuGet, VS Code extensions,
         //    Safari/Chrome extensions, etc. — without needing to match on raw scanner name strings).
-        return (app.Identifier.DisplayName, app.Identifier.Qualifier);
-
-        // 2. Special method cases with no checker representation.
-        if (app.UpdateMethod == UpdateMethod.None) return (Dash, null);
-        if (app.UpdateMethod == UpdateMethod.SelfUpdate) return GetPwaLabel(app.BundleId);
-
-        // 3. Checker-owned source override (App Store, Homebrew Cask/Formula, GitHub, MacPorts, Chocolatey).
-        if (app.UpdateMethod is not null)
-        {
-            foreach (var checker in _checkers)
-            {
-                if (checker.CanCheck(app) && checker.SourceOverride is { } src)
-                {
-                    return src;
-                }
-            }
-        }
-
-        // 4. Fallback: scanner display name, no qualifier (PackageRegistry, Sdk, Specialised checkers).
-        return (app.Identifier.DisplayName, null);
+        return (record.App.Identifier.DisplayName, record.App.Identifier.Qualifier);
+        //
+        // // 2. Special method cases with no checker representation.
+        // if (app.UpdateMethod == UpdateMethod.None) return (Dash, null);
+        // if (app.UpdateMethod == UpdateMethod.SelfUpdate) return GetPwaLabel(app.BundleId);
+        //
+        // // 3. Checker-owned source override (App Store, Homebrew Cask/Formula, GitHub, MacPorts, Chocolatey).
+        // if (app.UpdateMethod is not null)
+        // {
+        //     foreach (var checker in _checkers)
+        //     {
+        //         if (checker.CanCheck(app) && checker.SourceOverride is { } src)
+        //         {
+        //             return src;
+        //         }
+        //     }
+        // }
+        //
+        // // 4. Fallback: scanner display name, no qualifier (PackageRegistry, Sdk, Specialised checkers).
+        // return (app.Identifier.DisplayName, null);
     }
 
     /// <summary>
@@ -753,9 +740,9 @@ public sealed class LiveProgressRenderer(
     /// into a single human-friendly label. Qualifiers such as <c>(global)</c> are
     /// rendered in dark gray on capable terminals.
     /// </summary>
-    private string FormatSourceCell(AppRecord app, int sourceW)
+    private string FormatSourceCell(AppRecord record, int sourceW)
     {
-        var (label, qualifier) = GetSourceParts(app);
+        var (label, qualifier) = GetSourceParts(record);
         var full = qualifier is null ? label : $"{label} ({qualifier})";
         var truncated = AnsiStyle.Truncate(full.Trim(), sourceW).PadRight(sourceW);
 
@@ -777,40 +764,17 @@ public sealed class LiveProgressRenderer(
     }
 
     /// <summary>
-    /// Returns the display name for the <c>Update Method</c> column by finding the first
-    /// registered checker whose <see cref="IUpdateChecker.CanCheck"/> returns true for the app.
-    /// Falls back to a generic label when no checker matches (e.g. Self Update apps).
-    /// </summary>
-    private string GetCheckerDisplayName(AppRecord app)
-    {
-        if (app.UpdateMethod is null or UpdateMethod.None)
-        {
-            return Dash;
-        }
-
-        foreach (var checker in _checkers)
-        {
-            if (checker.CanCheck(app))
-            {
-                return checker.DisplayName;
-            }
-        }
-
-        return app.UpdateMethod == UpdateMethod.SelfUpdate ? SelfUpdateLabel : (app.UpdateMethod.ToString() ?? Dash);
-    }
-
-    /// <summary>
     /// Returns the string to show in the Name column.
     /// Scanners with <see cref="IScanner.StripTagFromDisplayName"/> strip the colon-delimited tag
     /// (e.g. Docker <c>repo:tag</c> → <c>repo</c>).
     /// VS Code extensions: shows the marketplace display name (Description) rather than the extension ID.
     /// Everything else: uses <see cref="AppRecord.Name"/> directly.
     /// </summary>
-    private string GetDisplayName(AppRecord app)
+    private string GetDisplayName(AppRecord record)
     {
-        if (_scanners.TryGetValue(app.Identifier.Name, out var scanner)
+        if (_scanners.TryGetValue(record.App.Identifier.Name, out var scanner)
             && scanner.StripTagFromDisplayName
-            && app.Name is { } rawName)
+            && record.App.Name is { } rawName)
         {
             var colonIdx = rawName.IndexOf(':');
             if (colonIdx > 0)
@@ -819,12 +783,7 @@ public sealed class LiveProgressRenderer(
             }
         }
 
-        if (app.Kind == AppKind.Extension && !string.IsNullOrEmpty(app.Description))
-        {
-            return app.Description;
-        }
-
-        return app.Name ?? "";
+        return record.App.Name ?? "";
     }
 
     /// <summary>Resolves the scanner's display name from the registered scanner map, falling back to the raw scanner string.</summary>
@@ -838,31 +797,31 @@ public sealed class LiveProgressRenderer(
     /// For sha256 digest-versioned artifacts (e.g. Docker), version ordering is meaningless —
     /// equality is the only relevant comparison, so <c>UpdateAvailable</c> is trusted directly.
     /// </summary>
-    private static bool IsEffectivelyOutdated(AppRecord app)
+    private static bool IsEffectivelyOutdated(AppRecord record)
     {
-        if (!app.UpdateAvailable)
+        if (!record.UpdateAvailable)
         {
             return false;
         }
 
-        var installed = app.InstalledVersion?.Trim();
-        var latest = app.LatestVersion?.Trim();
+        var installed = record.App.InstalledVersion?.Trim();
+        var latest = record.App.LatestVersion?.Trim();
 
         if (string.IsNullOrWhiteSpace(installed) || string.IsNullOrWhiteSpace(latest))
         {
-            return app.UpdateAvailable;
+            return record.UpdateAvailable;
         }
 
         // When the latest version is a content-addressed hash (e.g. Docker sha256), ordering
         // is meaningless — trust UpdateAvailable directly regardless of the installed string.
         if (latest.StartsWith("sha256:", StringComparison.Ordinal))
         {
-            return app.UpdateAvailable;
+            return record.UpdateAvailable;
         }
 
         if (string.Equals(installed, latest, StringComparison.OrdinalIgnoreCase))
         {
-            return app.UpdateAvailable;
+            return record.UpdateAvailable;
         }
 
         return VersionComparer.Compare(installed, latest) < 0;
@@ -874,16 +833,16 @@ public sealed class LiveProgressRenderer(
     /// Outdated rows show <c><yellow>current</yellow> → <green>latest</green></c>
     /// padded to <paramref name="versionW"/> display columns.
     /// </summary>
-    private static string BuildVersionCell(AppRecord app, int versionW, bool outdated)
+    private static string BuildVersionCell(AppRecord record, int versionW, bool outdated)
     {
-        var installed = (app.InstalledVersion ?? Dash).Trim();
+        var installed = (record.App.InstalledVersion ?? Dash).Trim().Split(',')[0];
 
         if (!outdated)
         {
             return AnsiStyle.Truncate(installed, versionW).PadRight(versionW);
         }
 
-        var latest = (app.LatestVersion ?? Dash).Trim();
+        var latest = (record.App.LatestVersion ?? Dash).Trim().Split(',')[0];
         const string arrow = " → ";
 
         // Split the available width roughly in half so both sides get equal room.
@@ -902,25 +861,25 @@ public sealed class LiveProgressRenderer(
     /// Returns the shell command to update an app, or <see langword="null"/> when no actionable
     /// command applies (extensions, self-update apps, unresolved methods).
     /// </summary>
-    private static string? GetUpdateCommand(AppRecord app)
+    private static string? GetUpdateCommand(AppRecord record)
     {
-        if (app.Kind == AppKind.Extension)
+        if (record.App.Kind == AppKind.Extension)
         {
             return null;
         }
 
-        var detail = app.UpdateMethodDetail;
+        var detail = record.App.UpdateMethodDetail;
 
-        return app.UpdateMethod switch
+        return record.App.UpdateMethod switch
         {
             UpdateMethod.AppStore when detail is not null => $"mas upgrade {detail}",
-            UpdateMethod.HomebrewCask when detail is not null && app.Identifier.Name == "Homebrew" => $"brew upgrade --cask {ExtractCaskToken(detail)}",
-            UpdateMethod.HomebrewFormula when detail is not null && app.Identifier.Name == "Homebrew" => $"brew upgrade {detail}",
+            UpdateMethod.HomebrewCask when detail is not null && record.App.Identifier.Name == "Homebrew" => $"brew upgrade --cask {ExtractCaskToken(detail)}",
+            UpdateMethod.HomebrewFormula when detail is not null && record.App.Identifier.Name == "Homebrew" => $"brew upgrade {detail}",
             UpdateMethod.MacPorts when detail is not null => $"sudo port upgrade {detail}",
             UpdateMethod.Chocolatey when detail is not null => $"choco upgrade {detail}",
-            UpdateMethod.PackageRegistry => GetRegistryUpdateCommand(app),
-            UpdateMethod.Specialised when app.Identifier.Name == "Docker" && detail is not null => $"docker pull {detail}",
-            UpdateMethod.Sdk when app.Identifier.Name is "Dotnet" or "DotnetRuntime" => null,
+            UpdateMethod.PackageRegistry => GetRegistryUpdateCommand(record),
+            UpdateMethod.Specialised when record.App.Identifier.Name == "Docker" && detail is not null => $"docker pull {detail}",
+            UpdateMethod.Sdk when record.App.Identifier.Name is "Dotnet" or "DotnetRuntime" => null,
             _ => null
         };
     }
@@ -928,15 +887,15 @@ public sealed class LiveProgressRenderer(
     /// <summary>
     /// Returns the update command for package-registry-based apps, dispatched by scanner type.
     /// </summary>
-    private static string? GetRegistryUpdateCommand(AppRecord app)
+    private static string? GetRegistryUpdateCommand(AppRecord record)
     {
-        var detail = app.UpdateMethodDetail;
+        var detail = record.App.UpdateMethodDetail;
         if (detail is null)
         {
             return null;
         }
 
-        return app.Identifier.Name switch
+        return record.App.Identifier.Name switch
         {
             "NuGet" => $"dotnet tool update -g {detail}",
             "NugetLocalTools" => $"dotnet tool update {detail}",

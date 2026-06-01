@@ -18,6 +18,8 @@ public static class VersionComparer
             return false;
         }
 
+        installed = installed.Split(',')[0];
+        latest = latest.Split(',')[0];
         return Compare(installed, latest) < 0;
     }
 
@@ -137,4 +139,6 @@ public static class VersionComparer
     }
 
     private readonly record struct SemVer(int Major, int Minor, int Patch, string? PreRelease);
+    
+    public static readonly IComparer<string> Instance = Comparer<string>.Create(Compare);
 }

@@ -1,24 +1,22 @@
-namespace apps.Scanners;
+namespace apps.Components;
 
 /// <summary>
 /// Shared utilities for scanner implementations.
 /// </summary>
 internal static class ScannerHelper
 {
-    private static readonly Dictionary<string, string[]> WindowsFallbacks;
-    private static readonly EnumerationOptions WindowsEnumerationOptions;
+    private static readonly Dictionary<string, string[]> WindowsFallbacks = [];
 
     static ScannerHelper()
     {
         if (OperatingSystem.IsWindows())
         {
-            WindowsFallbacks ??= new Dictionary<string, string[]>();
             WindowsFallbacks.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local", "Programs"), []);
             WindowsFallbacks.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Roaming"), []);
             WindowsFallbacks.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)), []);
             WindowsFallbacks.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)), []);
 
-            WindowsEnumerationOptions = new EnumerationOptions
+            var windowsEnumerationOptions = new EnumerationOptions
             {
                 RecurseSubdirectories = true,
                 MatchCasing = MatchCasing.CaseInsensitive,
@@ -27,7 +25,7 @@ internal static class ScannerHelper
 
             foreach (var fallback in WindowsFallbacks.Keys)
             {
-                var files = Directory.EnumerateFiles(fallback, "*.exe", WindowsEnumerationOptions).ToArray();
+                var files = Directory.EnumerateFiles(fallback, "*.exe", windowsEnumerationOptions).ToArray();
                 WindowsFallbacks[fallback] = files;
             }
         }

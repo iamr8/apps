@@ -1,5 +1,3 @@
-using apps.Scanners;
-
 using Microsoft.Extensions.DependencyInjection;
 
 namespace apps.Components.Windows;
