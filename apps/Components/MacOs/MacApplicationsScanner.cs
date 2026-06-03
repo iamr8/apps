@@ -880,12 +880,41 @@ public sealed partial class MacApplicationsScanner(
                 return null;
             }
 
-            var appArtifact = result.Artifacts.FirstOrDefault(c => c.App?.Length > 0)?.App?.Any(a => a.Equals(appPath, StringComparison.OrdinalIgnoreCase)) == true;
-            var target = result.Artifacts.FirstOrDefault(c => c.Target?.Length > 0)?.Target?.Equals(appPath, StringComparison.OrdinalIgnoreCase) == true;
-            var uninstallArtifact = result.Artifacts.FirstOrDefault(c => c.Uninstall?.Length > 0)?.Uninstall?.Any(u => u.Values.Any(paths => paths.Any(p => p.Equals(appPath, StringComparison.OrdinalIgnoreCase)))) == true;
-            if (appArtifact || target || uninstallArtifact)
+            foreach (var artifact in result.Artifacts)
             {
-                return (result.LatestVersion, result.Description);
+                if (artifact.App?.Any(a => a.Equals(appPath, StringComparison.OrdinalIgnoreCase)) == true)
+                {
+                    return (result.LatestVersion, result.Description);
+                }
+
+                if (artifact.Target is { Length: > 0 } && artifact.Target.Equals(appPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return (result.LatestVersion, result.Description);
+                }
+
+                if (artifact.Uninstall is { Length: > 0 })
+                {
+                    foreach (var uninstall in artifact.Uninstall)
+                    {
+                        foreach (var (key, value) in uninstall)
+                        {
+                            if (value.ValueKind == JsonValueKind.Array)
+                            {
+                                if (value.EnumerateArray().Any(p => p.GetString()?.Equals(appPath, StringComparison.OrdinalIgnoreCase) == true))
+                                {
+                                    return (result.LatestVersion, result.Description);
+                                }
+                            }
+                            else if (value.ValueKind == JsonValueKind.String)
+                            {
+                                if (value.GetString()?.Equals(appPath, StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    return (result.LatestVersion, result.Description);
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             return null;

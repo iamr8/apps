@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace apps.Components.MacOs;
@@ -127,7 +128,7 @@ public sealed class BrewCaskArtifact
     public string[]? App { get; init; }
 
     [JsonPropertyName("uninstall")]
-    public Dictionary<string, string[]>[]? Uninstall { get; init; }
+    public Dictionary<string, JsonElement>[]? Uninstall { get; init; }
 
     [JsonPropertyName("target")]
     public string? Target { get; init; }
