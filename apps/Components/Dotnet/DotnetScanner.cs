@@ -73,7 +73,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
             }
             else
             {
-                if (releasesIndex?.ReleasesIndex is null)
+                if (releasesIndex?.ReleasesIndex is null || record.App.InstalledVersion is null)
                 {
                     yield return (record, false);
                     continue;

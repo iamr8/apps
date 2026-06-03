@@ -33,7 +33,7 @@ public sealed record DiscoveredApp
     public required AppAttribute Attribute { get; set; }
 
     /// <summary>Currently installed version string (may be null when unknown).</summary>
-    public string InstalledVersion { get; init; }
+    public string? InstalledVersion { get; init; }
 
     /// <summary>
     /// <c>CFBundleVersion</c> (build number) for .app bundles — distinct from

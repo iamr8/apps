@@ -1,7 +1,5 @@
 using System.Diagnostics;
 
-using apps.Components.Audit;
-
 using Microsoft.Extensions.Logging;
 
 namespace apps;
@@ -13,7 +11,6 @@ namespace apps;
 public sealed class Orchestrator(
     ScanOrchestrator scanner,
     CheckOrchestrator checker,
-    OsvAuditChecker auditor,
     PinManager pinManager,
     LiveProgressRenderer renderer,
     ILogger<Orchestrator> logger)
@@ -78,7 +75,7 @@ public sealed class Orchestrator(
 
         var (totalChecked, totalUpdates, errors) = await checker.CheckAsync(resolved, cancellationToken).ConfigureAwait(false);
 
-        // await auditor.AuditAsync(resolved, cancellationToken).ConfigureAwait(false);
+        // TODO: run the OSV security audit stage over `resolved` here once wired.
 
         var v = resolved
             .Where(a => options.ScopeKind is null || a.App.Kind == options.ScopeKind);
