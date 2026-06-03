@@ -6,9 +6,6 @@
 every installed application, SDK, runtime, developer tool, and library on a Mac and checks each one
 for available updates. All state is in-memory only — every run re-scans and re-checks from scratch.
 
-> Design principles, discovery sources, update-check logic, pipeline architecture, and performance details are
-> documented in [DESIGN.md](DESIGN.md).
-
 ## Tech Stack
 
 | Layer              | Choice                                       |
@@ -17,81 +14,26 @@ for available updates. All state is in-memory only — every run re-scans and re
 | CLI framework      | `System.CommandLine`                         |
 | HTTP               | `System.Net.Http.HttpClient` (typed clients) |
 | JSON               | `System.Text.Json`                           |
-| Testing            | xUnit                                        |
-
-## NuGet Package Versions
-
-The exact versions currently referenced in `apps.csproj`. Always consult this table before
-using a package API to avoid calling features that do not exist in the pinned version.
-
-| Package                                    | Version | Notes                                                |
-|--------------------------------------------|---------|------------------------------------------------------|
-| `Microsoft.Extensions.DependencyInjection` | 10.0.8  | DI container                                         |
-| `Microsoft.Extensions.Http`                | 10.0.8  | `IHttpClientFactory` + named/typed clients           |
-| `Microsoft.Extensions.Logging.Console`     | 10.0.8  | Console log provider wired into Serilog              |
-| `Serilog`                                  | 4.3.1   | Core logging library                                 |
-| `Serilog.Extensions.Logging`               | 10.0.0  | Bridge: `ILogger<T>` → Serilog pipeline              |
-| `Serilog.Sinks.Console`                    | 6.1.1   | Terminal sink (ANSI-aware)                           |
-| `Serilog.Sinks.File`                       | 7.0.0   | Rolling-file sink                                    |
-| `System.CommandLine`                       | 2.0.8   | CLI verbs, options, and argument parsing             |
-| `System.Threading.RateLimiting`            | 10.0.8  | `TokenBucketRateLimiter`, `SlidingWindowRateLimiter` |
-
-## Repository Layout
-
-```
-apps/
-├── CLAUDE.md                          ← this file
-├── DESIGN.md                          ← high-level architecture & decisions
-├── apps.slnx
-└── apps/
-    ├── apps.csproj
-    ├── Program.cs                     ← CLI root / DI composition
-    ├── Commands/                      ← root command configuration (options & action)
-    ├── Scanners/                      ← shared IScanner / IProjectLevelScanner contracts
-    ├── Checkers/                      ← shared IUpdateChecker contract
-    ├── Models/                        ← shared DTOs
-    ├── Infrastructure/                ← ProcessRunner, HttpClientFactory, etc.
-    ├── Orchestration/                 ← pipeline coordination (scan → resolve → check)
-    └── Components/                   ← vertical slices — one folder per component
-        ├── ComponentRegistration.cs ← single entry point: AddAllComponents()
-        ├── Dotnet/                    ← scanner, checker, NuGet tools, registration
-        ├── Node/                      ← scanner, npm global/project, registry checker
-        ├── Go/                        ← scanner, tools, go.mod, proxy checker
-        ├── Homebrew/                  ← scanner, cask+formula checkers
-        ├── AppStore/                  ← scanner, iTunes lookup checker
-        ├── MacPorts/                  ← scanner, checker
-        ├── Chocolatey/                ← scanner, checker
-        ├── Docker/                    ← image scanner, Docker Hub checker
-        ├── VsCode/                    ← extension scanner, marketplace checker
-        ├── JetBrains/                 ← plugin scanner, plugin repo checker
-        ├── GitHub/                    ← GitHub Releases checker
-        ├── Sparkle/                   ← appcast checker
-        ├── Electron/                  ← app-update.yml scanner, checker
-        ├── MacOs/                     ← Applications scanner, SW Update, Safari, Chrome, Xcode
-        ├── Swift/                     ← Package.swift scanner
-        └── Vcpkg/                     ← vcpkg.json scanner
-```
 
 ## Architecture & Key Conventions
 
 - **Async everywhere** — all I/O is `async/await`; `Task<T>` return types.
-- **Scanner interface** — every scanner implements `IScanner` and returns `IAsyncEnumerable<DiscoveredApp>`.
-- **Checker interface** — every checker implements `IUpdateChecker`; checkers self-report which `UpdateMethod` they
-  handle.
+- **Scanner interface** — every scanner implements `IScanner`: it discovers apps via `ScanAsync`
+  (`IAsyncEnumerable<DiscoveredApp>`) and resolves their updates via `CheckAsync`. Discovery and update-checking are
+  owned by the same slice; there is no separate checker contract.
 - **`Kind` discriminator** — every `DiscoveredApp` carries an `AppKind` value:
-  `App | SystemApp | Packages | Libraries | Dep | Service | Extension`.
-  CLI-facing string values (used with `--kind`): `app | package | lib | dep | service | ext`.
-  `SystemApp` is excluded from `--kind` since system apps cannot be updated independently of the OS.
+  `App | Package | Service | Extension`.
+  CLI-facing string values (used with `--kind`): `app | package | service | ext`.
 - **No caching** — every run re-scans and re-checks from scratch; all state is in-memory only.
-- **Update-method priority** —
-  `AppStore > Homebrew Cask > Homebrew Formula > Sparkle > Electron > GitHub > MacPorts > Chocolatey > PackageRegistry > SDK-specific`.
-- **No duplicate work** — the update pipeline skips the homebrew pass for apps that already have a suggested method from
+- **Update-source priority** — per app, the resolution order is
+  `AppStore > Homebrew Cask > Homebrew Formula > Sparkle > Electron > GitHub > PackageRegistry > SDK-specific`.
+- **No duplicate work** — the update pipeline skips the Homebrew pass for apps that have already resolved a version from
   their scanner.
-- **Project deps are excluded** — project-manifest scanners (`NugetProjectScanner`, `GoModScanner`, etc.) are always
-  skipped; only global/user-scope tools are scanned.
-- **ProcessRunner** — all shell invocations go through `Infrastructure.ProcessRunner` so they can be mocked in tests.
-- **RateLimitedHttpClient** — all registry HTTP calls go through a shared wrapper that respects `Retry-After` and
-  enforces per-host concurrency limits.
+- **Project deps are excluded** — only global/user-scope tools are scanned; project-manifest dependencies are not.
+- **ProcessRunner** — all shell invocations go through `ProcessRunner` so they can be mocked in tests.
+- **Rate-limited HTTP clients** — registry HTTP calls go through named clients created by `AddCheckerClient`, each
+  wrapped in a Polly resilience pipeline that enforces a per-client concurrency limit and retries transient
+  failures while honouring `Retry-After`.
 - **Nullable enabled** — treat every compiler warning as an error; resolve all warnings before completing any change.
 - **AOT-compatible** — all code must be AOT-friendly, performant, and memory-efficient. No reflection-based
   serialization, no `dynamic`, no `Assembly.Load` at runtime. Use source-generated `JsonSerializerContext` for all
@@ -104,98 +46,48 @@ apps/
 - **Graceful shutdown** — `Console.CancelKeyPress` (Ctrl+C) and `PosixSignalRegistration` (SIGTERM) cancel the
   root `CancellationTokenSource`. The token propagates through all scanners, checkers, HTTP calls, and subprocesses
   so in-flight work stops cooperatively. Exit code 130 on SIGINT.
-- **Four-stage concurrent pipeline:**
-    - Stage 1 (Discovery): all scanners run in parallel, results flow through a bounded `Channel<DiscoveredApp>` (
-      capacity 512, `FullMode = Wait`).
-    - Stage 2 (Method Resolution): apps without a suggested update method are matched against Homebrew casks/formulas,
-      Chocolatey packages, and Homebrew catalog. Includes fuzzy search for unresolved GUI apps.
-    - Stage 3 (Update Check): apps are grouped by `UpdateMethod`; all groups run concurrently, results stream through a
-      `Channel<UpdateCheckResult>` to the live renderer.
-    - Stage 4 (Security Audit): auditable packages are batch-queried against OSV.dev for known CVEs, then GHSA-prefixed
-      results are enriched with patched-version info from the GitHub Advisory Database REST API (public, no auth).
+- **Three-stage concurrent pipeline:**
+    - Stage 1 (Discovery): all scanners run in parallel (`ScanOrchestrator`), results flow through a bounded
+      `Channel<DiscoveredApp>` (capacity 512). Update-source matching (e.g. Homebrew cask/formula resolution) happens
+      inside each scanner's own `CheckAsync`, not as a separate stage.
+    - Stage 2 (Update Check): `CheckOrchestrator` groups discovered apps back by their owning scanner, runs every
+      scanner's `CheckAsync` concurrently, and streams results to the live renderer as each check completes.
+    - Stage 3 (Security Audit): auditable packages are batch-queried against OSV.dev for known CVEs (`OsvAuditChecker`),
+      then GHSA-prefixed results are enriched with patched-version info from the GitHub Advisory Database REST API.
 - **Subprocess concurrency** — a `SemaphoreSlim(6)` in `ProcessRunner` caps the number of concurrent child processes.
-- **Per-host HTTP rate limiting** — `RateLimitedHttpHandler` uses `SemaphoreSlim` per host and a
-  `TokenBucketRateLimiter`
-  for JetBrains (4 req/s). Backs off on any `429` / `Retry-After` response with a single automatic retry.
+- **Per-client HTTP rate limiting** — each named client built by `AddCheckerClient` carries a Polly `ConcurrencyLimiter`
+  (per-client request gate) and retries transient `429` / `5xx` responses (up to 3 attempts) honouring `Retry-After`.
 - **`SocketsHttpHandler` per named client** — `PooledConnectionLifetime = 2 min`, `PooledConnectionIdleTimeout = 90 s`,
   `EnableMultipleHttp2Connections = true`, `AutomaticDecompression = GZip | Brotli`.
-- **Electron apps** — tagged `AppKind.App` with `UpdateMethod.Electron`; `app-update.yml` is parsed line-by-line
+- **Electron apps** — tagged `AppAttribute.ElectronApp`; `app-update.yml` is parsed line-by-line
   (no YAML library) for AOT safety. Detail encoded as `"github:{owner}/{repo}"` or `"generic:{url}"`.
-- **PWA / browser-hosted apps** — tagged `UpdateMethod.SelfUpdate`; no external check is performed.
-- **System apps** — bundles whose `CFBundleIdentifier` starts with `com.apple.` or any bundle under
-  `/System/Applications` — tagged `AppKind.SystemApp` with `UpdateMethod.None`. Never appear in output. Never checked.
-- **Deduplication** — if a package is already tracked as a global tool, project-level entries for the same name +
+- **PWA / browser-hosted apps** — tagged `AppAttribute.PwaApp`; no external check is performed.
+- **System apps** — bundles under `/System/Applications` (or `com.apple.*` bundles) are skipped during discovery —
+  never emitted, never tracked, never checked.
+- **Deduplication** — if a package is already tracked as a global tool, duplicate entries for the same name +
   version are merged rather than duplicated.
 
 ## App Kind Reference
 
-| Kind        | CLI value | What it covers                                                                                                                                                                    |
-|-------------|-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `App`       | `app`     | GUI `.app` bundles from `/Applications`, `~/Applications` — including Electron apps and PWAs; macOS Software Update items                                                         |
-| `Packages`  | `package` | Globally installed tools & runtimes: .NET SDK, Node.js, Go, Rust, dotnet global tools, npm -g, Go GOPATH/bin binaries, Docker images, Homebrew formulas and casks, MacPorts ports |
-| `Libraries` | `lib`     | Project-level library dependencies from manifest files (`*.csproj`, `go.mod`, `package.json`, `Package.swift`, `vcpkg.json`) — **opt-in only**                                    |
-| `Dep`       | `dep`     | Miscellaneous or ambiguous dependencies not yet classified into a more specific kind                                                                                              |
-| `Service`   | `service` | Background daemons in `LaunchAgents` / `LaunchDaemons` or Login Items                                                                                                             |
-| `Extension` | `ext`     | IDE add-ons and editor plug-ins: VS Code extensions, JetBrains IDE plugins                                                                                                        |
-
-> `AppKind.SystemApp` is used internally but **excluded from all output** — system apps cannot be updated independently
-> of the OS.
-
-## Update-Method Priority Chain
-
-```
-Priority 1  — App Store        requires CFBundleIdentifier matching a MAS record or entry in `mas list`
-Priority 2  — Homebrew Cask    match by cask name or CFBundleIdentifier
-Priority 3  — Homebrew Formula match by formula name
-Priority 4  — Sparkle          SUFeedURL present in Info.plist → fetch appcast XML
-Priority 5  — Electron         app-update.yml in Contents/Resources → GitHub Releases or generic feed
-Priority 6  — GitHub Releases  detect repo via Info.plist metadata, executable strings, or cask source URL
-Priority 7  — MacPorts         match by port name
-Priority 8  — Chocolatey       match by choco package name
-Priority 9  — Package Registry NuGet · npm · Go module proxy
-Priority 10 — Specialised      Docker Hub · VS Code Marketplace · JetBrains Plugin Repository · macOS Software Update
-Priority 11 — SDK-specific     dotnet sdk check · rustup check
-Priority 12 — Unresolved       tracked but no update mechanism found; flagged for manual review
-Priority 13 — SelfUpdate       PWA / browser-hosted web app; update managed by the host browser
-```
-
-## Key Interfaces
-
-```csharp
-interface IScanner
-{
-    string Name { get; }
-    bool IsAvailable();
-    IAsyncEnumerable<DiscoveredApp> ScanAsync(CancellationToken cancellationToken);
-}
-
-interface IUpdateChecker
-{
-    UpdateMethod Method { get; }
-    bool CanCheck(AppRecord app);
-    Task<UpdateCheckResult> CheckAsync(AppRecord app, CancellationToken cancellationToken);
-    Task<IReadOnlyList<UpdateCheckResult>> CheckBatchAsync(
-        IReadOnlyList<AppRecord> apps, CancellationToken cancellationToken);
-}
-```
+| Kind        | CLI value | What it covers                                                                                                                                              |
+|-------------|-----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `App`       | `app`     | GUI `.app` bundles from `/Applications`, `~/Applications` — including Electron apps and PWAs; macOS Software Update items                                   |
+| `Package`   | `package` | Globally installed tools & runtimes: .NET SDK, Node.js, Go, dotnet global tools, npm -g, Go GOPATH/bin binaries, Docker images, Homebrew formulas and casks |
+| `Service`   | `service` | Background daemons in `LaunchAgents` / `LaunchDaemons` or Login Items                                                                                       |
+| `Extension` | `ext`     | IDE add-ons and editor plug-ins: VS Code extensions, JetBrains IDE plugins                                                                                  |
 
 ## CLI Usage
 
 ```
 apps                        # scan + check for updates → display outdated apps
 apps --all | -a             # show all apps (outdated + up-to-date)
-apps --kind | -k <kind>    # show all apps of a specific kind
+apps --kind | -k <kind>     # show all apps of a specific kind
 apps --dry-run | -d         # scan only — show discovered apps without checking for updates
-apps --pin | -p <name>     # pin a package at its current version (suppresses update notifications)
-apps --unpin <name>        # remove a pin from a package
+apps --pin | -p <name>      # pin a package at its current version (suppresses update notifications)
+apps --unpin <name>         # remove a pin from a package
+apps --install              # install "apps" to /usr/local/bin so it can be run from anywhere
 apps --upgrade              # check if a newer version of apps is available
 ```
-
-- macOS 13+
-- Homebrew installed at `/opt/homebrew` (Apple Silicon) or `/usr/local` (Intel); detected at runtime.
-- `mas` CLI optionally installed for App Store lookups.
-- `dotnet`, `node`, `python3`, `rustup`, `go`, `rbenv`, `nvm`, `sdkman`, etc. — all optional; scanners
-  degrade gracefully when a tool is absent.
 
 ## Log File Location
 
@@ -207,12 +99,6 @@ apps --upgrade              # check if a newer version of apps is available
 cd apps
 dotnet run
 dotnet run -- -a
-```
-
-## Testing
-
-```bash
-dotnet test
 ```
 
 ## Coding Instructions
@@ -285,7 +171,7 @@ This project follows [Conventional Commits](https://www.conventionalcommits.org/
 |---------|--------------------------------------------------------------|
 | `feat`  | A new feature or meaningful change to existing functionality |
 | `fix`   | A bug fix                                                    |
-| `docs`  | Documentation-only changes (README, CLAUDE.md, DESIGN.md)    |
+| `docs`  | Documentation-only changes (README, CLAUDE.md)               |
 | `ci`    | Changes to GitHub Actions workflows or CI configuration      |
 | `test`  | Adding or updating tests                                     |
 | `perf`  | Performance improvements with no functional change           |
@@ -363,10 +249,10 @@ version and notifies the user when a newer release is available.
 
 ### When to Increment
 
-| Change type                              | Bump    |
-|------------------------------------------|---------|
-| Breaking CLI interface or output format  | `MAJOR` |
-| New scanner, checker, or CLI option      | `MINOR` |
-| Bug fix, performance tweak, docs update  | `PATCH` |
+| Change type                             | Bump    |
+|-----------------------------------------|---------|
+| Breaking CLI interface or output format | `MAJOR` |
+| New scanner, checker, or CLI option     | `MINOR` |
+| Bug fix, performance tweak, docs update | `PATCH` |
 
 

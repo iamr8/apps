@@ -1,9 +1,9 @@
 # apps
 
-A macOS CLI tool that discovers every installed application, SDK, runtime, developer tool, and library on your Mac and checks each one for available updates. All state is in-memory -- every run re-scans and re-checks from scratch.
+A macOS CLI tool that discovers every installed application, SDK, runtime, developer tool, and library on your Mac and
+checks each one for available updates. All state is in-memory -- every run re-scans and re-checks from scratch.
 
 The tool is **non-destructive**: it reports what is outdated but never performs updates itself.
-
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/iamr8/apps/ci.yml?branch=main&style=flat-square&label=build)
 ![Security](https://img.shields.io/github/actions/workflow/status/iamr8/apps/security.yml?branch=main&style=flat-square&label=security)
@@ -14,7 +14,7 @@ The tool is **non-destructive**: it reports what is outdated but never performs 
 ## Features
 
 - Scans GUI applications from `/Applications` and `~/Applications`
-- Discovers Homebrew formulas and casks, App Store apps, MacPorts ports
+- Discovers Homebrew formulas and casks, App Store apps
 - Checks developer SDKs and runtimes: .NET, Node.js, Go, Xcode
 - Inspects globally installed tools: dotnet global tools, npm -g packages, Go binaries
 - Detects IDE extensions: VS Code, JetBrains plugins
@@ -26,20 +26,18 @@ The tool is **non-destructive**: it reports what is outdated but never performs 
 
 ## Architecture
 
-The tool uses a four-stage concurrent pipeline:
+The tool uses a three-stage concurrent pipeline:
 
-1. **Discovery** — all scanners run in parallel, streaming results through a bounded channel.
-2. **Method Resolution** — apps without a suggested update method are matched against Homebrew casks/formulas and Chocolatey package catalogs. Includes catalog lookups and fuzzy search for unresolved GUI apps.
-3. **Update Check** — apps are grouped by update method; all groups run concurrently, results stream to a live renderer.
-4. **Security Audit** — all auditable packages are batch-queried against OSV.dev for known CVEs, then enriched with patched-version info from the GitHub Advisory Database.
+1. **Discovery** — all scanners run in parallel, streaming results through a bounded channel. Update-source matching (
+   e.g. Homebrew cask/formula resolution) happens inside each scanner.
+2. **Update Check** — discovered apps are grouped back by their owning scanner; all scanners check concurrently, and
+   results stream to a live renderer as each completes.
+3. **Security Audit** — all auditable packages are batch-queried against OSV.dev for known CVEs, then enriched with
+   patched-version info from the GitHub Advisory Database.
 
 ## Requirements
 
 - macOS 13 or later
-- .NET 10 SDK (for building from source)
-- Homebrew (detected at `/opt/homebrew` or `/usr/local`)
-- Optional: `mas` CLI for App Store lookups
-- Optional: `GITHUB_TOKEN` environment variable for higher GitHub API rate limits (5000 req/hr vs 60 req/hr)
 
 ## Usage
 
@@ -50,45 +48,38 @@ apps --kind | -k <kind> # show all apps of a specific kind
 apps --dry-run | -d     # scan only -- discover apps without checking for updates
 apps --pin | -p <name>  # pin a package at its current version (suppresses updates)
 apps --unpin <name>     # remove a pin from a package
+apps --install          # install "apps" to /usr/local/bin so it can be run from anywhere
+apps --upgrade          # check if a newer version of apps is available
 ```
 
 ### Kind Filter
 
-| Value     | What it shows                                                          |
-|-----------|------------------------------------------------------------------------|
-| `app`     | GUI .app bundles (including Electron apps)                             |
-| `package` | Globally installed tools, runtimes, Homebrew formulas/casks, Docker    |
-| `lib`     | Project-level library dependencies (opt-in)                            |
-| `dep`     | Miscellaneous dependencies                                             |
-| `service` | Background daemons (LaunchAgents/Daemons, Login Items)                 |
-| `ext`     | IDE extensions and editor plugins (VS Code, JetBrains)                 |
-
+| Value     | What it shows                                                       |
+|-----------|---------------------------------------------------------------------|
+| `app`     | GUI .app bundles (including Electron apps)                          |
+| `package` | Globally installed tools, runtimes, Homebrew formulas/casks, Docker |
+| `service` | Background daemons (LaunchAgents/Daemons, Login Items)              |
+| `ext`     | IDE extensions and editor plugins (VS Code, JetBrains)              |
 
 ## Supported Components
 
-| Component   | What it covers                                                                                         | Scanner                         | Checker                        |
-|-------------|--------------------------------------------------------------------------------------------------------|---------------------------------|--------------------------------|
-| AppStore    | macOS App Store apps (via `mas` CLI)                                                                   | `AppStoreScanner`               | `AppStoreChecker`              |
-| Audit       | CVE vulnerability scanning via OSV.dev + GitHub Advisory Database                              | --                              | `OsvAuditChecker`, `GitHubAdvisoryEnricher` |
-| Chocolatey  | Chocolatey packages (Windows cross-check)                                                              | `ChocoScanner`                  | `ChocoChecker`                 |
-| Docker      | Docker images (local digest vs Hub)                                                                    | `DockerImageScanner`            | `DockerHubChecker`             |
-| Dotnet      | .NET SDKs, runtimes, NuGet global/local tools, project packages                                        | `DotnetScanner`, `NugetGlobalToolsScanner`, `NugetLocalToolsScanner`, `NugetProjectScanner`, `DotnetRuntimeScanner` | `DotnetReleasesChecker`, `NugetRegistryChecker` |
-| Electron    | Electron apps with `app-update.yml` (GitHub or generic feed)                                           | `ElectronScanner`               | `ElectronChecker`              |
-| GitHub      | Apps updatable via GitHub Releases API                                                                  | --                              | `GitHubReleasesChecker`        |
-| Go          | Go binaries, tools in GOPATH/bin, go.mod dependencies                                                  | `GoScanner`, `GoToolsScanner`, `GoModScanner` | `GoModProxyChecker`  |
-| Homebrew    | Homebrew formulas and casks                                                                            | `HomebrewScanner`               | `HomebrewChecker`              |
-| JetBrains   | JetBrains IDE plugins (IDEA, Rider, WebStorm, etc.)                                                    | `JetBrainsPluginScanner`        | `JetBrainsPluginChecker`       |
-| MacOs       | GUI .app bundles, macOS Software Update, Xcode, Safari extensions, Chrome extensions                   | `ApplicationsScanner`, `MacOsUpdateScanner`, `XcodeScanner`, `SafariExtScanner`, `ChromeExtScanner` | `MacOsUpdateChecker` |
-| MacPorts    | MacPorts ports                                                                                         | `MacPortsScanner`               | `MacPortsChecker`              |
-| Node        | Node.js, npm global packages, npm project packages                                                     | `NodeScanner`, `NpmGlobalScanner`, `NpmProjectScanner` | `NpmRegistryChecker` |
-| Sparkle     | Indie macOS apps using Sparkle framework (appcast XML)                                                 | --                              | `SparkleChecker`               |
-| Swift       | Swift Package Manager dependencies (Package.swift)                                                     | `SwiftPackageScanner`           | --                             |
-| Vcpkg       | C/C++ vcpkg dependencies (vcpkg.json)                                                                  | `VcpkgScanner`                  | --                             |
-| VsCode      | VS Code extensions (marketplace)                                                                       | `VsCodeExtScanner`              | `VsCodeExtChecker`             |
+| Component | What it covers                                                                                                                      | 
+|-----------|-------------------------------------------------------------------------------------------------------------------------------------|
+| Audit     | CVE scanning via OSV.dev + GitHub Advisory Database                                                                                 | 
+| Chrome    | Chrome extensions                                                                                                                   | 
+| Docker    | Docker images (local digest vs Hub)                                                                                                 | 
+| Dotnet    | .NET SDKs, runtimes, NuGet global tools                                                                                             | 
+| Go        | Go binaries and tools in GOPATH/bin                                                                                                 | 
+| JetBrains | JetBrains IDE plugins (IDEA, Rider, WebStorm, etc.)                                                                                 | 
+| MacOs     | GUI .app bundles, Homebrew formulas/casks, App Store apps, Sparkle & Electron apps, macOS Software Update, Xcode, Safari extensions | 
+| Node      | Node.js, npm global packages                                                                                                        | 
+| VsCode    | VS Code extensions (marketplace)                                                                                                    | 
 
 ## Installation
 
 ### Build from Source
+
+- .NET 10 SDK (for building from source)
 
 ```bash
 git clone https://github.com/iamr8/apps.git
