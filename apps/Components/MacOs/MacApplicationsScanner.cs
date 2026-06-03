@@ -355,6 +355,11 @@ public sealed partial class MacApplicationsScanner(
         var infoResult = await infoTask.ConfigureAwait(false);
 
         var packages = ParseBrewInfo(infoResult);
+        if (packages is null)
+        {
+            logger.LogWarning("Failed to parse Homebrew info output, skipping Homebrew packages");
+            yield break;
+        }
 
         foreach (var formula in packages.Formulae)
         {
