@@ -50,6 +50,7 @@ apps --pin | -p <name>  # pin a package at its current version (suppresses updat
 apps --unpin <name>     # remove a pin from a package
 apps --install          # install "apps" to /usr/local/bin so it can be run from anywhere
 apps --upgrade          # check if a newer version of apps is available
+apps --version | -v     # show the current version of apps
 ```
 
 ### Kind Filter

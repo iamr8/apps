@@ -48,6 +48,11 @@ public static class UpdateCommand
         Description = "Check if a newer version of apps is available"
     };
 
+    private static readonly Option<bool> OPTION_version = new("--version", "-v")
+    {
+        Description = "Show the current version of apps"
+    };
+
     /// <summary>Configures the root command with update options and action.</summary>
     public static void Configure(RootCommand rootCmd, Orchestrator orchestrator, IServiceProvider serviceProvider)
     {
@@ -71,13 +76,40 @@ public static class UpdateCommand
         rootCmd.Options.Add(OPTION_install);
         rootCmd.Options.Add(OPTION_upgrade);
 
+        // RootCommand ships a built-in --version option; remove it so our own
+        // --version / -v takes over with consistent output and the -v alias.
+        var builtInVersion = rootCmd.Options.FirstOrDefault(o => o.Name is "--version");
+        if (builtInVersion is not null)
+        {
+            rootCmd.Options.Remove(builtInVersion);
+        }
+
+        rootCmd.Options.Add(OPTION_version);
+
         rootCmd.SetAction(async (parseResult, cancellationToken) =>
         {
+            if (parseResult.GetValue(OPTION_version))
+            {
+                Console.WriteLine($"apps v{SelfUpdateChecker.CurrentVersion}");
+                return 0;
+            }
+
             if (parseResult.GetValue(OPTION_upgrade))
             {
                 Console.WriteLine($"apps v{SelfUpdateChecker.CurrentVersion}");
                 var httpFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
-                await SelfUpdateChecker.CheckForUpdateAsync(httpFactory, cancellationToken);
+                var upgradeResult = await SelfUpdateChecker.CheckForUpdateAsync(httpFactory, cancellationToken);
+
+                switch (upgradeResult)
+                {
+                    case SelfUpdateResult.UpToDate:
+                        Console.WriteLine($"\e[32m✓ You're on the latest version.\e[0m");
+                        break;
+                    case SelfUpdateResult.CheckFailed:
+                        Console.WriteLine("Couldn't check for updates — try again later.");
+                        break;
+                }
+
                 return 0;
             }
 
@@ -133,7 +165,7 @@ public static class UpdateCommand
             var result = await orchestrator.InvokeAsync(options, cancellationToken);
 
             var httpClientFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
-            await SelfUpdateChecker.CheckForUpdateAsync(httpClientFactory, cancellationToken);
+            _ = await SelfUpdateChecker.CheckForUpdateAsync(httpClientFactory, cancellationToken);
 
             return result;
         });

@@ -30,19 +30,21 @@ public static class SelfUpdateChecker
 
     /// <summary>
     /// Queries GitHub Releases for the latest version and prints a message if a newer version is available.
+    /// Returns the outcome so callers (e.g. <c>--upgrade</c>) can decide whether to announce an
+    /// up-to-date or failed check; the message for an available update is always printed here.
     /// </summary>
-    public static async Task CheckForUpdateAsync(IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    public static async Task<SelfUpdateResult> CheckForUpdateAsync(IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
     {
         try
         {
-            using var client = httpClientFactory.CreateClient("github");
+            using var client = httpClientFactory.CreateClient("github-api");
             var response = await client
                 .GetAsync($"/repos/{RepoOwner}/{RepoName}/releases/latest", cancellationToken)
                 .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
-                return;
+                return SelfUpdateResult.CheckFailed;
             }
 
             var release = await response.Content
@@ -53,7 +55,7 @@ public static class SelfUpdateChecker
 
             if (string.IsNullOrWhiteSpace(latestTag))
             {
-                return;
+                return SelfUpdateResult.CheckFailed;
             }
 
             if (VersionComparer.IsNewer(CurrentVersion, latestTag))
@@ -62,13 +64,28 @@ public static class SelfUpdateChecker
                 Console.WriteLine();
                 Console.WriteLine($"\e[33m⚡ A new version of apps is available: v{latestTag} (current: v{CurrentVersion})\e[0m");
                 Console.WriteLine($"\e[33m   {url}\e[0m");
+                return SelfUpdateResult.UpdateAvailable;
             }
+
+            return SelfUpdateResult.UpToDate;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Self-update check is best-effort; swallow failures silently.
+            return SelfUpdateResult.CheckFailed;
         }
     }
+}
+
+/// <summary>Outcome of a self-update check against GitHub Releases.</summary>
+public enum SelfUpdateResult
+{
+    /// <summary>The running binary is already at the latest published version.</summary>
+    UpToDate,
+    /// <summary>A newer version is available; the notice has already been printed.</summary>
+    UpdateAvailable,
+    /// <summary>The check could not complete (network error, rate limit, or unexpected response).</summary>
+    CheckFailed
 }
 
 internal sealed record SelfUpdateRelease(
