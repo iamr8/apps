@@ -96,7 +96,7 @@ public sealed partial class MacApplicationsScanner(
             yield return (app, error);
         }
 
-        var unresolvedApps = apps.Except(resolvedApps).ToList();
+        var unresolvedApps = apps.Where(a => !resolvedApps.Any(r => r.App.Name.Equals(a.App.Name, StringComparison.OrdinalIgnoreCase))).ToList();
         await foreach (var (app, resolved, error) in unresolvedApps.WhenAll<AppRecord, (AppRecord App, bool Resolved, bool Error)>(onPublication: CheckHomebrewAsync, cancellationToken: cancellationToken))
         {
             if (!resolved)
@@ -148,17 +148,17 @@ public sealed partial class MacApplicationsScanner(
 
     private async Task CheckAppAsync(AppRecord record, ChannelWriter<(AppRecord App, bool Resolved, bool Error)> writer, CancellationToken cancellationToken)
     {
+        if (record.App.Attribute.HasFlag(AppAttribute.HomebrewCask) || record.App.Attribute.HasFlag(AppAttribute.HomebrewFormula))
+        {
+            // Will be published on its method-specific check.
+            logger.LogDebug("App {AppName} has suggested Homebrew update method, skipping iTunes lookup", record.App.Name);
+            return;
+        }
+
         if (record.App.LatestVersion is not null)
         {
             logger.LogDebug("App {AppName} is already updated to v{Version}", record.App.Name, record.App.InstalledVersion);
             await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        if (!record.App.Attribute.HasFlag(AppAttribute.HomebrewCask) && !record.App.Attribute.HasFlag(AppAttribute.HomebrewFormula))
-        {
-            // Will be published on its method-specific check.
-            logger.LogDebug("App {AppName} has suggested Homebrew update method, skipping iTunes lookup", record.App.Name);
             return;
         }
 
