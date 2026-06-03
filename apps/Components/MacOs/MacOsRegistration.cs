@@ -10,7 +10,8 @@ public static class MacOsRegistration
     {
         services.AddCheckerClient("homebrew-api", "https://formulae.brew.sh", 4);
         services.AddCheckerClient("generic", "https://example.com", 4);
-        services.AddCheckerClient("github", "https://www.github.com", 10);
+        services.AddCheckerClient("github", "https://github.com", 10);
+        services.AddCheckerClient("github-api", "https://api.github.com", 10);
         services.AddCheckerClient("itunes", "https://itunes.apple.com", 6);
         services.AddCheckerClient("appstore-web", "https://apps.apple.com", 2);
         services.AddCheckerClient("sparkle", "https://example.com", 4);

@@ -12,7 +12,8 @@ public sealed class ConnectionWarmup(IHttpClientFactory httpClientFactory)
     [
         ("nuget", "/v3/index.json"),
         ("npm", "/"),
-        ("github", "/rate_limit"),
+        ("github", "/"),
+        ("github-api", "/rate_limit"),
         ("goproxy", "/"),
         ("dockerhub", "/v2/repositories/library/hello-world/tags/latest")
     ];
