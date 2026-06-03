@@ -763,7 +763,7 @@ public sealed partial class MacApplicationsScanner(
                 "iTunes lookup failed for {App}: {Message}",
                 record.App.Name,
                 ex.Message);
-            throw;
+            return true; // fail as "up-to-date" to avoid false positives on lookup failure, which is often transient and non-critical
         }
     }
 
