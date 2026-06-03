@@ -159,6 +159,8 @@ dotnet run -- -a
 33. Never write single-line block bodies for control flow constructs. Opening and closing braces for `try`, `catch`,
     `if`, `else`, `for`, `while`, `using`, etc. must each occupy their own line.
 34. All compiler warnings must be resolved before a change is considered complete. Never leave a warning unaddressed.
+35. Use the `gh` CLI anytime you need to verify something on GitHub — workflow runs, releases, tags, PRs, issues, or
+    repository state. Take advantage of its commands and capabilities instead of guessing or relying on assumptions.
 
 ## Commit Convention
 
