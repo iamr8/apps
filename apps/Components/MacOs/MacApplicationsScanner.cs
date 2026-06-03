@@ -188,10 +188,17 @@ public sealed partial class MacApplicationsScanner(
                     return;
                 }
             }
+            else if (record.App.Attribute.HasFlag(AppAttribute.PwaApp))
+            {
+                // PWAs are typically distributed outside the App Store and may not have a Sparkle feed, so we'll skip them.
+                logger.LogDebug("App {AppName} is identified as a PWA, which may not have a standard update mechanism", record.App.Name);
+                await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
+                return;
+            }
             else
             {
-                // This app is not an App Store/Sparkle/Electron app
-                Console.WriteLine($"App {record.App.Name} has no identifiable update method (not Sparkle, Electron, or App Store), skipping");
+                // This app seems to be installed manually by the user, so we'll skip it.
+                logger.LogDebug("App {AppName} has no identifiable update method (not Sparkle, Electron, or App Store), skipping", record.App.Name);
             }
 
             logger.LogDebug("No update information found for {AppName}", record.App.Name);
