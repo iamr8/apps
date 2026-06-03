@@ -382,8 +382,10 @@ public sealed partial class MacApplicationsScanner(
                 app.Description ??= cask.Description;
 
                 if (cask.InstalledVersion == app.InstalledVersion &&
+                    cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target == app.Path &&
                     !app.Attribute.HasFlag(AppAttribute.AppStoreApp))
                 {
+                    // We've already scanned this app. Now, we've made sure that this is a Cask
                     app.BundleId ??= cask.Token;
                     app.Attribute |= AppAttribute.HomebrewCask;
                     app.LatestVersion = cask.LatestVersion;
