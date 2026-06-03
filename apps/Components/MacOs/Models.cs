@@ -126,6 +126,9 @@ public sealed class BrewCaskArtifact
     [JsonPropertyName("app")]
     public string[]? App { get; init; }
 
+    [JsonPropertyName("uninstall")]
+    public Dictionary<string, string[]>[]? Uninstall { get; init; }
+
     [JsonPropertyName("target")]
     public string? Target { get; init; }
 }

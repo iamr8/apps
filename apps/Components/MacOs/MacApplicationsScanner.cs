@@ -124,7 +124,7 @@ public sealed partial class MacApplicationsScanner(
         try
         {
             var token = CreateToken(record.App.Name);
-            var tuple = await GetLatestVersionByCaskAsync(token, cancellationToken).ConfigureAwait(false);
+            var tuple = await GetLatestVersionByCaskAsync(token, record.App.Path, cancellationToken).ConfigureAwait(false);
             if (tuple is null)
             {
                 logger.LogDebug("No Homebrew information found for {AppName} with token '{Token}'", record.App.Name, token);
@@ -846,7 +846,7 @@ public sealed partial class MacApplicationsScanner(
     /// Queries <c>https://formulae.brew.sh/api/cask/{token}.json</c> for the latest version.
     /// Returns <c>null</c> on any failure (network, 404, parse error).
     /// </summary>
-    private async Task<(string LatestVersion, string? Description)?> GetLatestVersionByCaskAsync(string token, CancellationToken cancellationToken)
+    private async Task<(string LatestVersion, string? Description)?> GetLatestVersionByCaskAsync(string token, string? appPath, CancellationToken cancellationToken)
     {
         try
         {
@@ -861,7 +861,20 @@ public sealed partial class MacApplicationsScanner(
                 return null;
             }
 
-            return (result.LatestVersion, result.Description);
+            if (result.Artifacts is not { Length: > 0 })
+            {
+                return null;
+            }
+
+            var appArtifact = result.Artifacts.FirstOrDefault(c => c.App?.Length > 0)?.App?.Any(a => a.Equals(appPath, StringComparison.OrdinalIgnoreCase)) == true;
+            var target = result.Artifacts.FirstOrDefault(c => c.Target?.Length > 0)?.Target?.Equals(appPath, StringComparison.OrdinalIgnoreCase) == true;
+            var uninstallArtifact = result.Artifacts.FirstOrDefault(c => c.Uninstall?.Length > 0)?.Uninstall?.Any(u => u.Values.Any(paths => paths.Any(p => p.Equals(appPath, StringComparison.OrdinalIgnoreCase)))) == true;
+            if (appArtifact || target || uninstallArtifact)
+            {
+                return (result.LatestVersion, result.Description);
+            }
+
+            return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
