@@ -1,3 +1,10 @@
 <Solution>
+  <Folder Name="/_SolutionFolder/">
+    <File Path="CLAUDE.md" />
+    <File Path="LICENSE" />
+    <File Path="publish.sh" />
+    <File Path="README.md" />
+    <File Path="VERSION" />
+  </Folder>
   <Project Path="apps\apps.csproj" />
 </Solution>

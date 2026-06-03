@@ -1,7 +1,3 @@
-using System.Reflection;
-
-using apps.Infrastructure;
-
 using Microsoft.Extensions.DependencyInjection;
 
 namespace apps.Components.Audit;

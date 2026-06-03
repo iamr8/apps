@@ -1,11 +1,6 @@
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading.Channels;
-
-using apps.Infrastructure;
-using apps.Models;
 
 using Microsoft.Extensions.Logging;
 
@@ -21,8 +16,6 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
     : IScanner
 {
     private string? _executablePath;
-
-    public int Order => 5;
 
     public string Name => "VSCode";
 
@@ -295,8 +288,8 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
             PackageId = extensionId,
             InstalledVersion = version,
             Path = Path.Combine(ExtensionsRoot, extensionId),
-            UpdateMethod = UpdateMethod.SelfUpdate,
-            UpdateMethodDetail = extensionId
+            UpdateInfo = extensionId,
+            Attribute = AppAttribute.VsCodeExtension
         };
     }
 }

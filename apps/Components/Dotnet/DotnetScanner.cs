@@ -3,9 +3,6 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 
-using apps.Infrastructure;
-using apps.Models;
-
 using Microsoft.Extensions.Logging;
 
 namespace apps.Components.Dotnet;
@@ -20,8 +17,6 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
     private readonly ConcurrentDictionary<string, Task<string?>> _inflightNuget = new(StringComparer.OrdinalIgnoreCase);
 
     private string? _executablePath;
-
-    public int Order => 5;
 
     public string Name => "Dotnet";
 
@@ -138,7 +133,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
                 {
                     InstalledVersion = line.Version,
                     Path = Path.Combine(line.Path, line.Version),
-                    UpdateMethod = UpdateMethod.Sdk,
+                    Attribute = AppAttribute.DevTool | AppAttribute.Sdk,
                 };
             }
         }
@@ -179,7 +174,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
                 {
                     InstalledVersion = line.Version,
                     Path = Path.Combine(line.Path, line.Version),
-                    UpdateMethod = UpdateMethod.Sdk,
+                    Attribute = AppAttribute.DevTool | AppAttribute.Sdk,
                 };
             }
         }
@@ -218,7 +213,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
                     AppKind.DevTool)
                 {
                     InstalledVersion = line.Version,
-                    UpdateMethod = UpdateMethod.PackageRegistry,
+                    Attribute = AppAttribute.DevTool,
                 };
             }
         }

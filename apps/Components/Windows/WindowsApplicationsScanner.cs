@@ -1,7 +1,5 @@
 ﻿using System.Runtime.CompilerServices;
 
-using apps.Models;
-
 using Microsoft.Extensions.Logging;
 
 namespace apps.Components.Windows;
@@ -13,15 +11,13 @@ public class WindowsApplicationsScanner(ILogger<WindowsApplicationsScanner> logg
 {
     private Dictionary<string, bool> _executablePaths = [];
 
-    public int Order => 0;
-
     public string Name => "Applications";
 
     /// <inheritdoc/>
     public string DisplayName => "Applications";
 
     public OS SupportedOS => OS.Windows;
-    public AppKind Kind => AppKind.SystemApp | AppKind.App;
+    public AppKind Kind => AppKind.App;
 
     /// <inheritdoc/>
     public bool IsAvailable()

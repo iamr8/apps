@@ -3,6 +3,12 @@ using System.Text.Json.Serialization;
 
 namespace apps.Components.MacOs;
 
+public enum AppPlatform
+{
+    NativeMac,
+    IosOnMac
+}
+
 public sealed class ItunesLookupResponse
 {
     [JsonPropertyName("resultCount")]
@@ -16,6 +22,9 @@ public sealed class ItunesResult
 {
     [JsonPropertyName("version")]
     public string? Version { get; init; }
+
+    [JsonPropertyName("trackId")]
+    public long TrackId { get; init; }
 
     [JsonPropertyName("trackName")]
     public string? TrackName { get; init; }
@@ -36,10 +45,10 @@ public sealed class ItunesResult
 
     [JsonPropertyName("supportedDevices")]
     public string[]? SupportedDevices { get; init; }
-    
+
     [JsonPropertyName("description")]
     public string? Description { get; init; }
-    
+
     [JsonPropertyName("wrapperType")]
     public string? WrapperType { get; init; }
 }

@@ -4,9 +4,6 @@ using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using System.Xml;
 
-using apps.Infrastructure;
-using apps.Models;
-
 using Microsoft.Extensions.Logging;
 
 namespace apps.Components.Chrome;
@@ -23,8 +20,6 @@ public sealed class ChromeExtScanner(IHttpClientFactory httpClientFactory, ILogg
     : IScanner
 {
     private string? _executablePath;
-
-    public int Order => 5;
 
     public string Name => "ChromeExt";
 
@@ -223,8 +218,8 @@ public sealed class ChromeExtScanner(IHttpClientFactory httpClientFactory, ILogg
                     Description = description,
                     InstalledVersion = version,
                     PackageId = extId,
-                    UpdateMethod = UpdateMethod.SelfUpdate,
-                    UpdateMethodDetail = extId
+                    Attribute = AppAttribute.ChromeExtension,
+                    UpdateInfo = extId,
                 };
             }
         }

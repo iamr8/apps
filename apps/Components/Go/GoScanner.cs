@@ -1,11 +1,7 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
-
-using apps.Infrastructure;
-using apps.Models;
 
 using Microsoft.Extensions.Logging;
 
@@ -18,8 +14,6 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
     : IScanner
 {
     private string? _executablePath;
-
-    public int Order => 5;
 
     public string Name => "Go";
 
@@ -63,7 +57,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
         var moduleApps = new List<AppRecord>();
         foreach (var record in apps)
         {
-            if (record.App.Identifier.Qualifier == "Sdk")
+            if (record.App.Attribute.HasFlag(AppAttribute.Sdk))
             {
                 if (latestGoVersion is not null)
                 {
@@ -72,7 +66,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
 
                 yield return (record, false);
             }
-            else if (record.App.UpdateMethod == UpdateMethod.PackageRegistry && record.App.UpdateMethodDetail is not null)
+            else if (record.App.Attribute.HasFlag(AppAttribute.Library) && record.App.UpdateInfo is not null)
             {
                 moduleApps.Add(record);
             }
@@ -101,7 +95,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
     {
         try
         {
-            var latest = await FetchModuleLatestAsync(record.App.UpdateMethodDetail!, cancellationToken).ConfigureAwait(false);
+            var latest = await FetchModuleLatestAsync(record.App.UpdateInfo!, cancellationToken).ConfigureAwait(false);
             if (latest is not null)
             {
                 record.App.LatestVersion = latest;
@@ -112,7 +106,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Go module proxy check failed for {Package}",
-                record.App.UpdateMethodDetail);
+                record.App.UpdateInfo);
             await writer.WriteAsync((record, true), cancellationToken).ConfigureAwait(false);
         }
     }
@@ -177,7 +171,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
                 new AppIdentifier(Name, DisplayName, "Sdk"),
                 AppKind.DevTool)
             {
-                UpdateMethod = UpdateMethod.Sdk,
+                Attribute = AppAttribute.DevTool | AppAttribute.Sdk,
                 Path = _executablePath!,
                 InstalledVersion = version
             };
@@ -238,8 +232,8 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
                     {
                         Path = binaryPath,
                         InstalledVersion = null,
-                        UpdateMethod = UpdateMethod.Specialised,
-                        UpdateMethodDetail = binaryPath
+                        Attribute = AppAttribute.DevTool,
+                        UpdateInfo = binaryPath
                     };
                     continue;
                 }
@@ -279,8 +273,8 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
                 {
                     InstalledVersion = moduleVersion,
                     Path = binaryPath,
-                    UpdateMethod = moduleVersion is not null ? UpdateMethod.PackageRegistry : null,
-                    UpdateMethodDetail = modulePath
+                    Attribute = moduleVersion is not null ? AppAttribute.DevTool | AppAttribute.Library : AppAttribute.DevTool,
+                    UpdateInfo = modulePath
                 };
             }
         }

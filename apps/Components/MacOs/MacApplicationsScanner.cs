@@ -1,13 +1,10 @@
 using System.Collections.Concurrent;
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using System.Xml;
-
-using apps.Infrastructure;
-using apps.Models;
 
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +20,7 @@ namespace apps.Components.MacOs;
 /// tracked for inventory but never subjected to update checks.
 /// All other apps are tagged <see cref="AppKind.App"/>.
 /// </summary>
-public sealed class MacApplicationsScanner(
+public sealed partial class MacApplicationsScanner(
     PlistReader plistReader,
     IProcessRunner runner,
     IHttpClientFactory httpClientFactory,
@@ -33,21 +30,15 @@ public sealed class MacApplicationsScanner(
     private Dictionary<string, bool> _appsExecutablePaths = [];
     private string? _brewExecutablePath;
 
-    public int Order => 0; // Relatively fast, and many apps are prerequisites for other scanners (e.g. browsers hosting PWAs or extensions).
-
-    public string Name => "Applications";
+    public string Name => "Application";
 
     /// <inheritdoc/>
-    public string DisplayName => "Applications";
+    public string DisplayName => "Application";
 
     public OS SupportedOS => OS.MacOS;
-    public AppKind Kind => AppKind.SystemApp | AppKind.App | AppKind.Extension | AppKind.Package;
+    public AppKind Kind => AppKind.App | AppKind.Extension | AppKind.Package;
 
-    private readonly ConcurrentDictionary<string, PlistInfo> _plistCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, DiscoveredApp> _appCache = new(StringComparer.OrdinalIgnoreCase);
-
-    private readonly ConcurrentDictionary<string, (BrewCaskRecord Cask, DiscoveredApp App)> _casks = [];
-    private readonly ConcurrentDictionary<string, (BrewFormulaRecord Formula, DiscoveredApp App)> _formulas = [];
+    private readonly ConcurrentDictionary<string, DiscoveredApp> _scannedApps = new(StringComparer.OrdinalIgnoreCase);
 
     /// <inheritdoc/>
     public bool IsAvailable()
@@ -76,50 +67,12 @@ public sealed class MacApplicationsScanner(
     {
         await foreach (var app in EnumerateApps(cancellationToken))
         {
-            _appCache[app.Name] = app;
+            _scannedApps[app.Name] = app;
             yield return app;
         }
 
         await foreach (var app in EnumerateHomebrew(cancellationToken))
         {
-            if (_appCache.TryGetValue(app.Name, out var cachedApp))
-            {
-                // We check if the Homebrew app is the same as an app discovered in the Applications folder.
-                if (cachedApp.Path.Equals(app.Path, StringComparison.OrdinalIgnoreCase))
-                {
-                    // We check if the installed versions are the same.
-                    // If they are, we merge the Homebrew description into the existing record.
-                    var normalizedBrewVersion = app.InstalledVersion.Split(',')[0];
-                    if (normalizedBrewVersion.Equals(cachedApp.InstalledVersion))
-                    {
-                        if (cachedApp.Description is null && app.Description is not null)
-                        {
-                            cachedApp.Description = app.Description; // enrich existing record with Homebrew description if missing
-                        }
-
-                        if (cachedApp.UpdateMethod is null && app.UpdateMethod is not null)
-                        {
-                            cachedApp.UpdateMethod = app.UpdateMethod; // enrich existing record with Homebrew suggested method if missing
-                            cachedApp.UpdateMethodDetail = app.UpdateMethodDetail;
-                        }
-                    }
-                    else
-                    {
-                        // Realized that they're different, so we add the Homebrew app as a sub-app.
-                        cachedApp.SubApps ??= [];
-                        app.Description = null;
-                        cachedApp.SubApps.Add(app);
-                    }
-                }
-                else
-                {
-                    logger.LogWarning("Homebrew app {AppName} has the same name as an app discovered in the Applications folder but different path, skipping Homebrew record to avoid conflicts", app.Name);
-                }
-
-                continue;
-            }
-
-            _appCache[app.Name] = app;
             yield return app;
         }
 
@@ -185,7 +138,6 @@ public sealed class MacApplicationsScanner(
             }
 
             record.App.LatestVersion = tuple.Value.LatestVersion;
-            record.App.UpdateMethod = UpdateMethod.HomebrewCask;
             await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception)
@@ -203,7 +155,7 @@ public sealed class MacApplicationsScanner(
             return;
         }
 
-        if (record.App is { UpdateMethod: UpdateMethod.HomebrewCask or UpdateMethod.HomebrewFormula })
+        if (!record.App.Attribute.HasFlag(AppAttribute.HomebrewCask) && !record.App.Attribute.HasFlag(AppAttribute.HomebrewFormula))
         {
             // Will be published on its method-specific check.
             logger.LogDebug("App {AppName} has suggested Homebrew update method, skipping iTunes lookup", record.App.Name);
@@ -212,7 +164,7 @@ public sealed class MacApplicationsScanner(
 
         try
         {
-            if (record.App.SparkleFeedUrl is not null)
+            if (record.App.Attribute.HasFlag(AppAttribute.SparkleFeed))
             {
                 if (await GetLatestVersionBySparkleAsync(record, cancellationToken))
                 {
@@ -220,7 +172,7 @@ public sealed class MacApplicationsScanner(
                     return;
                 }
             }
-            else if (record.App is { UpdateMethod: UpdateMethod.Electron, UpdateMethodDetail: not null })
+            else if (record.App.Attribute.HasFlag(AppAttribute.ElectronApp) && !record.App.Attribute.HasFlag(AppAttribute.AppStoreApp))
             {
                 if (await GetLatestVersionByElectronAsync(record, cancellationToken))
                 {
@@ -228,10 +180,18 @@ public sealed class MacApplicationsScanner(
                     return;
                 }
             }
-            else if (await GetLatestVersionByITunesAsync(record, cancellationToken))
+            else if (record.App.Attribute.HasFlag(AppAttribute.AppStoreApp))
             {
-                await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
-                return;
+                if (await GetLatestVersionByITunesAsync(record, cancellationToken))
+                {
+                    await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+            }
+            else
+            {
+                // This app is not an App Store/Sparkle/Electron app
+                Console.WriteLine($"App {record.App.Name} has no identifiable update method (not Sparkle, Electron, or App Store), skipping");
             }
 
             logger.LogDebug("No update information found for {AppName}", record.App.Name);
@@ -268,6 +228,11 @@ public sealed class MacApplicationsScanner(
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                if (rootIsSystem)
+                {
+                    continue;
+                }
+
                 var plist = await GetPlistInfo(bundlePath, cancellationToken);
                 if (plist is null)
                 {
@@ -286,14 +251,6 @@ public sealed class MacApplicationsScanner(
                 var version = Normalize(plist.ShortVersion ?? plist.BundleVersion)!;
                 var buildVersion = Normalize(plist.BundleVersion)!;
                 var bundleId = Normalize(plist.BundleIdentifier)!;
-
-                // System app: physically lives under /System/Applications OR has a com.apple.* bundle ID.
-                var isSystemApp = rootIsSystem || IsAppleBundleId(bundleId);
-                if (isSystemApp)
-                {
-                    logger.LogDebug("Identified system app: {Name} [{BundleId}] at {Path}", name, bundleId ?? "—", bundlePath);
-                    continue;
-                }
 
                 var subApps = new List<DiscoveredApp>();
                 var pluginsDir = Path.Combine(bundlePath, "Contents", "PlugIns");
@@ -318,77 +275,67 @@ public sealed class MacApplicationsScanner(
                             var appexPlist = await GetPlistInfo(appexPath, cancellationToken);
                             if (appexPlist is not null)
                             {
-                                if (appexPlist.IsSafariExtension)
+                                if (appexPlist.Attribute.HasFlag(AppAttribute.SafariExtension))
                                 {
-                                    plist = plist with { IsSafariExtension = true }; // propagate to parent app for easier detection
+                                    plist = plist with
+                                    {
+                                        Attribute = plist.Attribute | AppAttribute.SafariExtension
+                                    }; // propagate to parent app for easier detection
                                     break;
                                 }
-                                //
-                                // var appexName = Normalize(appexPlist.DisplayName ?? Path.GetFileNameWithoutExtension(appexPath));
-                                // if (string.IsNullOrWhiteSpace(appexName))
-                                // {
-                                //     continue;
-                                // }
-                                //
-                                // var appexIndentifier = new AppIdentifier("OS", "OS", "Extension");
-                                // subApps.Add(new DiscoveredApp(appexName, appexIndentifier, AppKind.Extension)
-                                // {
-                                //     InstalledVersion = version,
-                                //     InstalledBuildVersion = buildVersion,
-                                //     BundleId = bundleId,
-                                //     Path = appexPath,
-                                // });
                             }
                         }
                     }
                 }
 
-                if (plist.IsElectronApp)
+                if (plist.Attribute.HasFlag(AppAttribute.ElectronApp) && !plist.Attribute.HasFlag(AppAttribute.AppStoreApp))
                 {
-                    var electronApp = await GetElectronApp(bundlePath, name, version, bundleId, subApps, cancellationToken);
-                    yield return electronApp with { SubApps = subApps };
+                    var electronApp = await GetElectronApp(bundlePath, name, version, bundleId, subApps, plist, cancellationToken);
+                    yield return electronApp with
+                    {
+                        SubApps = subApps,
+                        Attribute = plist.Attribute
+                    };
                     continue;
                 }
 
-                UpdateMethod? suggestedMethod = null;
-                string? suggestedDetail = null;
-                string? suFeedUrl = null;
-
-                if (IsWebApp(bundleId))
+                string? updateInfo = null;
+                if (plist.Attribute.HasFlag(AppAttribute.SparkleFeed))
                 {
-                    // PWA / browser-hosted web app: the browser manages updates, no external check needed
-                    suggestedMethod = null;
-                }
-                else if (!string.IsNullOrWhiteSpace(plist?.SparkleUrl))
-                {
-                    suggestedMethod = UpdateMethod.Sparkle;
-                    suggestedDetail = plist.SparkleUrl;
-                    suFeedUrl = plist.SparkleUrl;
-                }
-                else if (IsMasInstalled(bundlePath))
-                {
-                    // AppStore (priority 1) beats Sparkle (priority 4): prefer App Store even when
-                    // the bundle also advertises a Sparkle feed.
-                    suggestedMethod = UpdateMethod.AppStore;
+                    updateInfo = plist.SparkleUrl;
                 }
 
                 logger.LogDebug(
                     "Discovered {Kind} {Name} v{Version} [{BundleId}] at {Path}",
                     AppKind.App, name, version, bundleId ?? "—", bundlePath);
 
-                var appIdentifier = plist.IsSafariExtension
-                    ? new AppIdentifier("SafariExt", "Safari", "Extension")
-                    : new AppIdentifier(Name, "Application");
-                yield return new DiscoveredApp(this, name, appIdentifier, plist.IsSafariExtension ? AppKind.Extension : AppKind.App)
+                AppIdentifier appIdentifier;
+                if (plist.Attribute.HasFlag(AppAttribute.PwaApp))
+                {
+                    appIdentifier = new AppIdentifier(Name, DisplayName, "PWA");
+                }
+                else if (plist.Attribute.HasFlag(AppAttribute.AppStoreApp))
+                {
+                    appIdentifier = new AppIdentifier(Name, DisplayName, "App Store");
+                }
+                else if (plist.Attribute.HasFlag(AppAttribute.SafariExtension))
+                {
+                    appIdentifier = new AppIdentifier("SafariExt", "Safari", "Extension");
+                }
+                else
+                {
+                    appIdentifier = new AppIdentifier(Name, DisplayName);
+                }
+
+                yield return new DiscoveredApp(this, name, appIdentifier, plist.Attribute.HasFlag(AppAttribute.SafariExtension) ? AppKind.Extension : AppKind.App)
                 {
                     InstalledVersion = version,
                     InstalledBuildNumber = buildVersion,
                     BundleId = bundleId,
                     Path = bundlePath,
-                    UpdateMethod = suggestedMethod,
-                    UpdateMethodDetail = suggestedDetail,
-                    SparkleFeedUrl = suFeedUrl,
-                    SubApps = subApps
+                    UpdateInfo = updateInfo,
+                    SubApps = subApps,
+                    Attribute = plist.Attribute
                 };
             }
         }
@@ -416,26 +363,58 @@ public sealed class MacApplicationsScanner(
                 BundleId = formula.Name,
                 InstalledVersion = formula.InstalledVersion[0].Version,
                 LatestVersion = formula.LatestVersion.StableVersion,
-                UpdateMethod = UpdateMethod.HomebrewFormula,
+                Attribute = AppAttribute.Library | AppAttribute.HomebrewFormula,
                 Description = formula.Description,
                 OsvEcosystem = OsvEcosystemName.None
             };
-            _formulas[formula.Name] = (formula, discoveredApp);
             yield return discoveredApp;
         }
 
         foreach (var cask in packages.Casks)
         {
+            if (_scannedApps.TryGetValue(cask.Name[0], out var app))
+            {
+                app.Description ??= cask.Description;
+
+                if (cask.InstalledVersion == app.InstalledVersion &&
+                    !app.Attribute.HasFlag(AppAttribute.AppStoreApp))
+                {
+                    app.BundleId ??= cask.Token;
+                    app.Attribute |= AppAttribute.HomebrewCask;
+                    app.LatestVersion = cask.LatestVersion;
+                    app.Description ??= cask.Description;
+                    app.Path ??= cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target;
+                }
+                else
+                {
+                    // When the pointer reaches this line, means we haven't found this application during our scan
+                    app.SubApps ??= [];
+                    var brewSubApp = new DiscoveredApp(this, cask.Name[0], new AppIdentifier(Name, DisplayName, "Cask"), AppKind.App)
+                    {
+                        BundleId = cask.Token,
+                        Attribute = AppAttribute.App | AppAttribute.MacApp | AppAttribute.HomebrewCask,
+                        InstalledVersion = cask.InstalledVersion,
+                        LatestVersion = cask.LatestVersion,
+                        Description = cask.Description,
+                        Path = cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target,
+                    };
+                    app.SubApps.Add(brewSubApp);
+                }
+
+                continue;
+            }
+
+            // When the pointer reaches this line, means we haven't found this application during our scan
             var discoveredApp = new DiscoveredApp(this, cask.Name[0], new AppIdentifier(Name, DisplayName, "Cask"), AppKind.App)
             {
                 BundleId = cask.Token,
+                Attribute = AppAttribute.App | AppAttribute.MacApp | AppAttribute.HomebrewCask,
                 InstalledVersion = cask.InstalledVersion,
                 LatestVersion = cask.LatestVersion,
-                UpdateMethod = UpdateMethod.HomebrewCask,
                 Description = cask.Description,
-                Path = cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target
+                Path = cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)
+                    ?.Target,
             };
-            _casks[cask.Token] = (cask, discoveredApp);
             yield return discoveredApp;
         }
     }
@@ -498,8 +477,8 @@ public sealed class MacApplicationsScanner(
             AppKind.App)
         {
             LatestVersion = version,
-            UpdateMethod = UpdateMethod.Specialised,
-            UpdateMethodDetail = version,
+            UpdateInfo = version,
+            Attribute = AppAttribute.None,
         };
     }
 
@@ -517,7 +496,7 @@ public sealed class MacApplicationsScanner(
         return commaIdx >= 0 ? after[..commaIdx].Trim() : after.Trim();
     }
 
-    private async Task<DiscoveredApp> GetElectronApp(string bundlePath, string name, string version, string bundleId, List<DiscoveredApp> subApps, CancellationToken cancellationToken)
+    private async Task<DiscoveredApp> GetElectronApp(string bundlePath, string name, string version, string bundleId, List<DiscoveredApp> subApps, PlistInfo plist, CancellationToken cancellationToken)
     {
         string? methodDetail = null;
         var ymlPath = Path.Combine(bundlePath, "Contents", "Resources", "app-update.yml");
@@ -563,30 +542,25 @@ public sealed class MacApplicationsScanner(
             }
         }
 
-        var appIdentifier = new AppIdentifier(Name, "Electron", "Application");
+        var appIdentifier = new AppIdentifier(Name, DisplayName, "Electron");
         return new DiscoveredApp(this, name, appIdentifier, AppKind.App)
         {
             InstalledVersion = version,
             InstalledBuildNumber = null,
             BundleId = bundleId,
             Path = bundlePath,
-            UpdateMethod = UpdateMethod.Electron,
-            UpdateMethodDetail = methodDetail,
-            SubApps = subApps
+            UpdateInfo = methodDetail,
+            SubApps = subApps,
+            Attribute = plist.Attribute
         };
     }
 
     private async Task<bool> GetLatestVersionBySparkleAsync(AppRecord record, CancellationToken cancellationToken)
     {
-        if (record.App.SparkleFeedUrl is null)
-        {
-            return false;
-        }
-
         try
         {
             using var client = httpClientFactory.CreateClient("sparkle");
-            using var response = await client.GetAsync(record.App.SparkleFeedUrl, cancellationToken).ConfigureAwait(false);
+            using var response = await client.GetAsync(record.App.UpdateInfo, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var doc = new XmlDocument();
@@ -608,7 +582,7 @@ public sealed class MacApplicationsScanner(
                                     itemNode?.SelectSingleNode("sparkle:version", nsMgr)?.InnerText;
             if (latestVersion is null)
             {
-                logger.LogDebug("Sparkle feed {FeedUrl} for {App} has no version", record.App.SparkleFeedUrl, record.App.Name);
+                logger.LogDebug("Sparkle feed {FeedUrl} for {App} has no version", record.App.UpdateInfo, record.App.Name);
                 return false;
             }
 
@@ -619,24 +593,22 @@ public sealed class MacApplicationsScanner(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(
-                "Failed to fetch Sparkle feed {FeedUrl} for {App}: {Message}",
-                record.App.SparkleFeedUrl, record.App.Name, ex.Message);
+            logger.LogWarning("Failed to fetch Sparkle feed {FeedUrl} for {App}: {Message}", record.App.UpdateInfo, record.App.Name, ex.Message);
             throw;
         }
     }
 
     private async Task<bool> GetLatestVersionByElectronAsync(AppRecord record, CancellationToken cancellationToken)
     {
-        if (record.App.UpdateMethodDetail is null)
+        if (record.App.UpdateInfo is null)
         {
             return false;
         }
 
         string? latestVersion = null;
-        if (record.App.UpdateMethodDetail.StartsWith("generic:", StringComparison.OrdinalIgnoreCase))
+        if (record.App.UpdateInfo.StartsWith("generic:", StringComparison.OrdinalIgnoreCase))
         {
-            var url = record.App.UpdateMethodDetail["generic:".Length..];
+            var url = record.App.UpdateInfo["generic:".Length..];
             try
             {
                 using var client = httpClientFactory.CreateClient("generic");
@@ -653,9 +625,9 @@ public sealed class MacApplicationsScanner(
                 throw;
             }
         }
-        else if (record.App.UpdateMethodDetail.StartsWith("github:", StringComparison.OrdinalIgnoreCase))
+        else if (record.App.UpdateInfo.StartsWith("github:", StringComparison.OrdinalIgnoreCase))
         {
-            var parts = record.App.UpdateMethodDetail.Split(':', 2);
+            var parts = record.App.UpdateInfo.Split(':', 2);
             if (parts.Length != 2)
             {
                 return false;
@@ -705,7 +677,7 @@ public sealed class MacApplicationsScanner(
     {
         string? query = null;
 
-        if (record.App.UpdateMethodDetail is { Length: > 0 } appleId && long.TryParse(appleId, out _))
+        if (record.App.UpdateInfo is { Length: > 0 } appleId && long.TryParse(appleId, out _))
         {
             query = $"/lookup?id={appleId}";
         }
@@ -733,15 +705,9 @@ public sealed class MacApplicationsScanner(
                 return false;
             }
 
-            // this: we have a False Positive here. This API realizes iOS apps as macOS softwares.
-            // We need to check iOS (WrappedBundle)
-            // We need a two-level fetch process. `desktopSoftware` delivers metadata for mac-native software.
-            // `macSoftware` seems to be more broad, also includes Catalyst and iOS-only software.
-            // The former however is more accurate, as `macSoftware` might return iPad metadata for certain apps.
-            // We therefore prefer `desktopSoftware` and fall back to `macSoftware` if no info was found.
-            var resp = result?.Results?.FirstOrDefault(r => r.Kind.Equals("desktop-software", StringComparison.OrdinalIgnoreCase) ||
-                                                            r.Kind.Equals("mac-software", StringComparison.OrdinalIgnoreCase) ||
-                                                            r.Kind.Equals("software", StringComparison.OrdinalIgnoreCase));
+            var results = result.Results;
+            var resp = results.FirstOrDefault(r => "mac-software".Equals(r.Kind, StringComparison.OrdinalIgnoreCase))
+                       ?? results.FirstOrDefault(r => "software".Equals(r.Kind, StringComparison.OrdinalIgnoreCase));
             if (resp?.Version is null)
             {
                 logger.LogDebug(
@@ -750,31 +716,39 @@ public sealed class MacApplicationsScanner(
                 return false;
             }
 
-            if (resp.SupportedDevices is not null)
-            {
-                if (!resp.SupportedDevices.Any(c => c.Contains("Mac", StringComparison.OrdinalIgnoreCase)))
-                {
-                    // FALSE Positive risk!
-                    logger.LogDebug(
-                        "iTunes lookup for {App}: no Mac supported device found in response, skipping (response may contain iOS-only records)",
-                        record.App.Name);
-                    return false;
-                }
-            }
-
-            if (record.App.Identifier.DisplayName == "Application")
-            {
-                record.App.Identifier = record.App.Identifier with { DisplayName = "App Store", Qualifier = "Application" };
-            }
-
             if (record.App.Description is null && resp.Description is not null)
             {
                 record.App.Description = resp.Description;
             }
 
-            record.App.UpdateMethod = UpdateMethod.AppStore;
-            record.App.LatestVersion = resp.Version;
-            return true;
+            if ("mac-software".Equals(resp.Kind, StringComparison.OrdinalIgnoreCase))
+            {
+                record.App.LatestVersion = resp.Version;
+                return true;
+            }
+
+            // Only an iOS / iPad App Store record came back: the app is an iOS app made available on
+            // Apple Silicon Macs. The iTunes Search API reports just the iOS version, which Apple may
+            // gate from Mac (the Mac App Store can install an older build), so resolve the real
+            // Mac-installable version from the App Store product page rendered in Mac context.
+            var macVersion = resp.TrackId > 0
+                ? await GetMacInstallableVersionAsync(resp.TrackId, cancellationToken).ConfigureAwait(false)
+                : null;
+
+            if (macVersion is not null)
+            {
+                record.App.LatestVersion = macVersion;
+                return true;
+            }
+
+            // Mac version could not be resolved — flag for manual review rather than misreporting
+            // the app as outdated against an iOS version that cannot be installed on a Mac.
+            logger.LogDebug(
+                "iTunes lookup for {App}: only an iOS record (v{Version}) was returned and the Mac App Store version could not be resolved, flagging for manual review",
+                record.App.Name,
+                resp.Version);
+
+            return false;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -785,6 +759,81 @@ public sealed class MacApplicationsScanner(
             throw;
         }
     }
+
+    /// <summary>
+    /// Resolves the Mac-installable version of an iOS / iPad App Store app from its App Store
+    /// product page rendered in Mac context (<c>?platform=mac</c>). The iTunes Search API only
+    /// exposes the iOS version, which Apple may gate from Mac; the product page's most-recent
+    /// version reflects what the Mac App Store will actually install. Returns <c>null</c> on any failure.
+    /// </summary>
+    private async Task<string?> GetMacInstallableVersionAsync(long trackId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = httpClientFactory.CreateClient("appstore-web");
+            using var response = await client.GetAsync($"/us/app/id{trackId}?platform=mac", cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return ExtractMostRecentVersion(html);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Failed to fetch Mac App Store page for track {TrackId}", trackId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Extracts the most-recent version from the <c>serialized-server-data</c> JSON embedded in an
+    /// App Store product page. Scans for the first <c>primarySubtitle</c> carrying a version number
+    /// (the "What's New" entry). Returns <c>null</c> when the blob or a version cannot be found.
+    /// </summary>
+    private static string? ExtractMostRecentVersion(string html)
+    {
+        const string marker = "id=\"serialized-server-data\">";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        start += marker.Length;
+        var end = html.IndexOf("</script>", start, StringComparison.Ordinal);
+        if (end < 0)
+        {
+            return null;
+        }
+
+        var json = Encoding.UTF8.GetBytes(html.Substring(start, end - start));
+        var reader = new Utf8JsonReader(json);
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || !reader.ValueTextEquals("primarySubtitle"u8))
+            {
+                continue;
+            }
+
+            if (!reader.Read() || reader.TokenType != JsonTokenType.String)
+            {
+                continue;
+            }
+
+            var match = VersionNumberRegex().Match(reader.GetString() ?? string.Empty);
+            if (match.Success)
+            {
+                return match.Value;
+            }
+        }
+
+        return null;
+    }
+
+    [GeneratedRegex(@"\d+(?:\.\d+)+", RegexOptions.Compiled | RegexOptions.CultureInvariant)]
+    private static partial Regex VersionNumberRegex();
 
     /// <summary>
     /// Queries <c>https://formulae.brew.sh/api/cask/{token}.json</c> for the latest version.
@@ -839,11 +888,6 @@ public sealed class MacApplicationsScanner(
 
     private async Task<PlistInfo?> GetPlistInfo(string bundlePath, CancellationToken cancellationToken)
     {
-        if (_plistCache.TryGetValue(bundlePath, out var cachedPlist))
-        {
-            return cachedPlist;
-        }
-
         PlistInfo? plist = null;
         try
         {
@@ -854,37 +898,7 @@ public sealed class MacApplicationsScanner(
             logger.LogDebug(ex, "Failed to read plist for {Bundle}", bundlePath);
         }
 
-        if (plist is null)
-        {
-            return null;
-        }
-
-        _plistCache[bundlePath] = plist;
         return plist;
-    }
-
-    private static bool IsAppleBundleId(string? bundleId)
-    {
-        return bundleId is not null && bundleId.StartsWith("com.apple.", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsWebApp(string? bundleId)
-    {
-        return bundleId is not null &&
-               (bundleId.StartsWith("com.apple.Safari.WebApp.", StringComparison.OrdinalIgnoreCase) ||
-                bundleId.StartsWith("com.google.Chrome.app.", StringComparison.OrdinalIgnoreCase) ||
-                bundleId.StartsWith("com.microsoft.edgeapp.", StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// Returns <see langword="true"/> when the bundle is an App Store install.
-    /// Detected by either the <c>Contents/_MASReceipt/</c> directory (native macOS apps)
-    /// or the <c>Wrapper/</c> directory (iOS/iPadOS apps running on Apple Silicon).
-    /// </summary>
-    private static bool IsMasInstalled(string bundlePath)
-    {
-        return Directory.Exists(Path.Combine(bundlePath, "Contents", "_MASReceipt"))
-               || Directory.Exists(Path.Combine(bundlePath, "Wrapper"));
     }
 
     private static string? Normalize(string? value)

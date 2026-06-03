@@ -1,12 +1,8 @@
-using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using System.Xml;
-
-using apps.Infrastructure;
-using apps.Models;
 
 using Microsoft.Extensions.Logging;
 
@@ -23,8 +19,6 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
     : IScanner
 {
     private string[] _executablePaths = [];
-
-    public int Order => 5;
 
     public string Name => "JetBrains";
 
@@ -104,7 +98,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
                     logger.LogDebug(ex, "Failed to read plugin at {Path}", pluginDir);
                 }
 
-                if (app is null || !seen.Add(app.UpdateMethodDetail ?? app.Name))
+                if (app is null || !seen.Add(app.UpdateInfo ?? app.Name))
                 {
                     continue;
                 }
@@ -133,7 +127,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
     /// </summary>
     private async Task CheckPluginVersionAsync(AppRecord record, ChannelWriter<(AppRecord Record, bool Error)> writer, CancellationToken cancellationToken)
     {
-        var xmlId = record.App.UpdateMethodDetail;
+        var xmlId = record.App.UpdateInfo;
         if (string.IsNullOrWhiteSpace(xmlId))
         {
             await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
@@ -311,8 +305,8 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
             PackageId = id,
             InstalledVersion = version,
             Path = sourcePath,
-            UpdateMethod = UpdateMethod.Specialised,
-            UpdateMethodDetail = displayId,
+            Attribute = AppAttribute.JetBrainsPlugin,
+            UpdateInfo = displayId,
         };
     }
 }

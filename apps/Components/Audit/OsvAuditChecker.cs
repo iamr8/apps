@@ -1,9 +1,5 @@
-using System.Net;
 using System.Text.Json;
 using System.Threading.Channels;
-
-using apps.Infrastructure;
-using apps.Models;
 
 using Microsoft.Extensions.Logging;
 
@@ -201,9 +197,9 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, LivePr
 
     private static string GetPackageName(AppRecord record)
     {
-        if (record.App.UpdateMethodDetail is not null && record.App.UpdateMethod == UpdateMethod.PackageRegistry)
+        if (record.App.UpdateInfo is not null && record.App.Attribute.HasFlag(AppAttribute.Library))
         {
-            return record.App.UpdateMethodDetail;
+            return record.App.UpdateInfo;
         }
 
         return record.App.Name;

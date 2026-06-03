@@ -3,12 +3,9 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-using apps.Commands;
 using apps.Components;
 using apps.Components.Audit;
-using apps.Infrastructure;
-using apps.Infrastructure.Logging;
-using apps.Orchestration;
+using apps.Logging;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;

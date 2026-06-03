@@ -1,12 +1,8 @@
 using System.Net.Http.Json;
-using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
-
-using apps.Infrastructure;
-using apps.Models;
 
 using Microsoft.Extensions.Logging;
 
@@ -25,8 +21,6 @@ public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory
         RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "amd64";
 
     private string? _executablePath;
-
-    public int Order => 5;
 
     public string Name => "Docker";
 
@@ -91,7 +85,7 @@ public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory
         ChannelWriter<(AppRecord Record, bool Error)> writer,
         CancellationToken cancellationToken)
     {
-        var imageRef = record.App.UpdateMethodDetail;
+        var imageRef = record.App.UpdateInfo;
         if (string.IsNullOrWhiteSpace(imageRef))
         {
             await writer.WriteAsync((record, false), cancellationToken).ConfigureAwait(false);
@@ -150,8 +144,7 @@ public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "Docker Hub check failed for {Image}",
-                imageRef);
+            logger.LogWarning("Failed to fetch digest update for {Image}", imageRef);
             await writer.WriteAsync((record, true), cancellationToken).ConfigureAwait(false);
         }
     }
@@ -192,8 +185,8 @@ public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory
         {
             InstalledVersion = tag,
             Digest = digest,
-            UpdateMethod = UpdateMethod.Specialised,
-            UpdateMethodDetail = imageRef,
+            Attribute = AppAttribute.DevTool | AppAttribute.Image,
+            UpdateInfo = imageRef,
         };
     }
 
@@ -260,4 +253,3 @@ internal sealed class DockerImageInfo
 
 [JsonSerializable(typeof(DockerTagInfo))]
 internal sealed partial class DockerJsonContext : JsonSerializerContext;
-

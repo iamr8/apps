@@ -5,9 +5,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
 
-using apps.Infrastructure;
-using apps.Models;
-
 using Microsoft.Extensions.Logging;
 
 namespace apps.Components.Node;
@@ -29,8 +26,6 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
     private string? _nodeExecutablePath;
     private string? _npmExecutablePath;
     private string? _nvmVersionsPath;
-
-    public int Order => 5;
 
     public string Name => "Node";
 
@@ -81,7 +76,7 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
 
         foreach (var record in apps)
         {
-            if (record.App.UpdateMethod == UpdateMethod.Sdk)
+            if (record.App.Attribute.HasFlag(AppAttribute.Sdk))
             {
                 sdkApps.Add(record);
             }
@@ -111,7 +106,7 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
     /// </summary>
     private async Task CheckNpmVersionAsync(AppRecord record, ChannelWriter<(AppRecord Record, bool Error)> writer, CancellationToken cancellationToken)
     {
-        var packageName = record.App.UpdateMethodDetail ?? record.App.PackageId ?? record.App.Name;
+        var packageName = record.App.UpdateInfo ?? record.App.PackageId ?? record.App.Name;
 
         try
         {
@@ -203,7 +198,7 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
             {
                 InstalledVersion = version,
                 Path = dir,
-                UpdateMethod = UpdateMethod.Sdk,
+                Attribute = AppAttribute.DevTool | AppAttribute.Sdk
             };
         }
     }
@@ -229,7 +224,7 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
         {
             InstalledVersion = version,
             Path = _nodeExecutablePath!,
-            UpdateMethod = UpdateMethod.Sdk,
+            Attribute = AppAttribute.DevTool | AppAttribute.Sdk
         };
     }
 
@@ -283,8 +278,8 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
                 {
                     PackageId = packageName,
                     InstalledVersion = version,
-                    UpdateMethod = UpdateMethod.PackageRegistry,
-                    UpdateMethodDetail = packageName,
+                    Attribute = AppAttribute.DevTool | AppAttribute.Library,
+                    UpdateInfo = packageName,
                 };
             }
         }
