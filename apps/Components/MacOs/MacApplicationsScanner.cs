@@ -123,6 +123,13 @@ public sealed partial class MacApplicationsScanner(
     {
         try
         {
+            if (record.App.LatestVersion is not null)
+            {
+                logger.LogDebug("App {AppName} is already updated to v{Version}", record.App.Name, record.App.InstalledVersion);
+                await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             var token = CreateToken(record.App.Name);
             var tuple = await GetLatestVersionByCaskAsync(token, record.App.Path, cancellationToken).ConfigureAwait(false);
             if (tuple is null)
