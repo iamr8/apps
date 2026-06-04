@@ -7,6 +7,8 @@ using apps.Components.MacOs;
 
 using Microsoft.Extensions.Logging;
 
+using Serilog;
+
 namespace apps;
 
 /// <summary>
@@ -308,7 +310,7 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to parse plist XML: {e}");
+                Log.Error(e, "Failed to parse plist XML node: <{NodeName}>", node.Name);
                 return null;
             }
         }

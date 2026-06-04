@@ -1,25 +1,32 @@
+using System.Diagnostics;
+
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
-using Serilog.Formatting.Display;
 
-namespace apps.Logging;
+namespace apps;
 
 /// <summary>
 /// Builds and configures the global Serilog logger.
 ///
-/// Sinks:
-///   • Console  — Warning+ by default; switches to Debug+ when --verbose is active.
-///               Plain theme for TTY; no-theme when redirected.
-///   • File     — Verbose (all levels), daily rolling.
-///               Path: ~/.local/share/apps/log/apps-YYYYMMDD.log
-///               Format: structured text with SourceContext + Caller enrichment.
+/// <para>
+/// Logging and console output are kept strictly separate:
+///   • <see cref="ILogger"/> / Serilog writes <b>only</b> to the log file — never to the console.
+///   • Everything the user sees on the console is written explicitly through
+///     <see cref="LiveProgressRenderer"/> via <c>Console.Write</c> / <c>Console.WriteLine</c>.
+/// This avoids per-source filtering: log noise lives in the file, the console stays curated.
+/// </para>
+///
+/// Sink:
+///   • File — Verbose (all levels), daily rolling.
+///            Path: ~/.local/share/apps/log/apps-YYYYMMDD.log
+///            Format: structured text with SourceContext + Caller enrichment.
 ///
 /// SourceContext note:
-///   When the Microsoft ILogger<T> bridge is used (via Serilog.Extensions.Logging),
-///   ILogger<MyClass>.Log(…) automatically enriches the event with
+///   When the Microsoft ILogger&lt;T&gt; bridge is used (via Serilog.Extensions.Logging),
+///   ILogger&lt;MyClass&gt;.Log(…) automatically enriches the event with
 ///   SourceContext = "apps.Infrastructure.MyClass" — the full CLR type name.
-///   The file template renders it as a short name; the console omits it for readability.
+///   The file template renders it as a short name.
 ///
 /// Caller note:
 ///   The LoggerCallerExtensions helpers push a "Caller" property to the LogContext
@@ -35,30 +42,21 @@ public static class SerilogConfigurator
         "{Caller}| {Message:lj}{NewLine}{Exception}";
 
     /// <summary>
-    /// Console: minimal — level and message only; no type noise.
-    /// </summary>
-    private const string ConsoleTemplate =
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}";
-
-
-    /// <summary>
-    /// Creates the Serilog logger, wires the supplied <paramref name="consoleSink"/> for
-    /// console output, and returns the <see cref="LoggingLevelSwitch"/> that controls the
-    /// console minimum level at runtime.
-    /// Set <see cref="RendererConsoleSink.Renderer"/> after the DI container is built.
+    /// Creates the global Serilog logger wired to the rolling file sink only.
     /// Call <see cref="Log.CloseAndFlushAsync"/> on app shutdown.
     /// </summary>
-    public static LoggingLevelSwitch Configure(string logDirectory, RendererConsoleSink consoleSink)
+    public static void Configure()
     {
+        var logDirectory = Debugger.IsAttached
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "apps-logs")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "apps", "log");
+
         Directory.CreateDirectory(logDirectory);
         var logFilePath = Path.Combine(logDirectory, "apps-.log");
-
-        var consoleLevelSwitch = new LoggingLevelSwitch(LogEventLevel.Warning);
 
         Log.Logger = new LoggerConfiguration()
             .Enrich.FromLogContext() // picks up CallerExtensions pushes
             .Enrich.With<ShortSourceContextEnricher>() // adds ShortSourceContext property
-            .WriteTo.Sink(consoleSink, levelSwitch: consoleLevelSwitch)
             .WriteTo.File(
                 logFilePath,
                 outputTemplate: FileTemplate,
@@ -69,13 +67,7 @@ public static class SerilogConfigurator
                 flushToDiskInterval: TimeSpan.FromSeconds(2))
             .MinimumLevel.Verbose()
             .CreateLogger();
-
-        return consoleLevelSwitch;
     }
-
-    /// <summary>Creates the <see cref="RendererConsoleSink"/> with the standard console formatter.</summary>
-    public static RendererConsoleSink CreateConsoleSink()
-        => new(new MessageTemplateTextFormatter(ConsoleTemplate));
 }
 
 /// <summary>
@@ -92,9 +84,9 @@ file sealed class ShortSourceContextEnricher : ILogEventEnricher
 
         var full = prop.ToString().Trim('"');
         var dot = full.LastIndexOf('.');
-        var short_ = dot >= 0 ? full[(dot + 1)..] : full;
+        var shortName = dot >= 0 ? full[(dot + 1)..] : full;
 
         logEvent.AddOrUpdateProperty(
-            factory.CreateProperty("ShortSourceContext", short_));
+            factory.CreateProperty("ShortSourceContext", shortName));
     }
 }

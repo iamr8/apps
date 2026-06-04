@@ -1,8 +1,6 @@
 using System.Diagnostics;
 
-using apps.Components;
 using apps.Components.Audit;
-using apps.Logging;
 
 namespace apps;
 
@@ -169,20 +167,6 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
                 : AnsiStyle.Green("up to date");
             var errorPart = errors > 0 ? "  " + AnsiStyle.Red($"{errors} error{(errors == 1 ? "" : "s")}") : "";
             Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Checked {AnsiStyle.Bold(total.ToString())} apps — {updateStr}{errorPart} {elapsed}");
-        }
-    }
-
-    /// <summary>
-    /// Writes a pre-formatted log line to stderr, properly interleaving with any active
-    /// status line. Called exclusively by <see cref="RendererConsoleSink"/>.
-    /// </summary>
-    public void WriteLogLine(string text)
-    {
-        lock (_lock)
-        {
-            ClearStatusLine();
-            Console.Error.WriteLine(text);
-            RestoreStatusLine();
         }
     }
 

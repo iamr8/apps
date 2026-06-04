@@ -1,11 +1,9 @@
 ﻿using System.CommandLine;
-using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
 using apps.Components;
 using apps.Components.Audit;
-using apps.Logging;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -28,11 +26,7 @@ internal static class Program
     {
         EnsureSafeWorkingDirectory();
 
-        var consoleSink = SerilogConfigurator.CreateConsoleSink();
-        var logDir = Debugger.IsAttached
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "apps-logs")
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "apps", "log");
-        SerilogConfigurator.Configure(logDir, consoleSink);
+        SerilogConfigurator.Configure();
         var services = new ServiceCollection();
 
         services.AddLogging(b =>
@@ -67,8 +61,6 @@ internal static class Program
         };
 
         using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => appLifetime.Cancel());
-
-        consoleSink.Renderer = serviceProvider.GetRequiredService<LiveProgressRenderer>();
 
         var rootCmd = new RootCommand("apps — discover and check for updates on macOS");
 
