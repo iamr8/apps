@@ -313,16 +313,11 @@ public sealed partial class MacApplicationsScanner(
                     continue;
                 }
 
-                string? updateInfo = null;
-                if (plist.Attribute.HasFlag(AppAttribute.SparkleFeed))
-                {
-                    updateInfo = plist.SparkleUrl;
-                }
-
                 logger.LogDebug(
                     "Discovered {Kind} {Name} v{Version} [{BundleId}] at {Path}",
                     AppKind.App, name, version, bundleId ?? "—", bundlePath);
 
+                string? updateInfo = null;
                 AppIdentifier appIdentifier;
                 if (plist.Attribute.HasFlag(AppAttribute.PwaApp))
                 {
@@ -335,6 +330,11 @@ public sealed partial class MacApplicationsScanner(
                 else if (plist.Attribute.HasFlag(AppAttribute.SafariExtension))
                 {
                     appIdentifier = new AppIdentifier("SafariExt", "Safari", "Extension");
+                }
+                else if (plist.Attribute.HasFlag(AppAttribute.SparkleFeed))
+                {
+                    appIdentifier = new AppIdentifier(Name, DisplayName, "Sparkle");
+                    updateInfo = plist.SparkleUrl;
                 }
                 else
                 {
@@ -607,7 +607,6 @@ public sealed partial class MacApplicationsScanner(
                 return false;
             }
 
-            record.App.Identifier = record.App.Identifier with { DisplayName = "Sparkle", Qualifier = "Application" };
             record.App.LatestVersion = latestVersion;
             record.App.LatestBuildNumber = latestBuildNumber;
             return true;
