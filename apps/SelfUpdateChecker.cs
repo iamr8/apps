@@ -13,7 +13,6 @@ public static class SelfUpdateChecker
 {
     private const string RepoOwner = "iamr8";
     private const string RepoName = "apps";
-    private const string ReleasesUrl = $"https://github.com/{RepoOwner}/{RepoName}/releases/tag/";
 
     /// <summary>Gets the current version of the running binary from the assembly informational version.</summary>
     public static string CurrentVersion
@@ -29,11 +28,30 @@ public static class SelfUpdateChecker
     }
 
     /// <summary>
-    /// Queries GitHub Releases for the latest version and prints a message if a newer version is available.
-    /// Returns the outcome so callers (e.g. <c>--upgrade</c>) can decide whether to announce an
-    /// up-to-date or failed check; the message for an available update is always printed here.
+    /// Queries GitHub Releases for the latest version and prints a notice when a newer version is
+    /// available, pointing the user at <c>apps --upgrade</c>. Used as a best-effort check at the end
+    /// of a normal run; the actual upgrade is performed by <see cref="SelfUpdater"/>.
     /// </summary>
     public static async Task<SelfUpdateResult> CheckForUpdateAsync(IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        var info = await FetchLatestReleaseAsync(httpClientFactory, cancellationToken).ConfigureAwait(false);
+
+        if (info.Result == SelfUpdateResult.UpdateAvailable)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"\e[33m⚡ A new version of apps is available: v{info.LatestVersion} (current: v{CurrentVersion})\e[0m");
+            Console.WriteLine($"\e[33m   call apps (--upgrade|-u) to upgrade to v{info.LatestVersion}\e[0m");
+        }
+
+        return info.Result;
+    }
+
+    /// <summary>
+    /// Queries GitHub Releases for the latest published release and compares it against the running
+    /// binary, without printing anything. Returns the comparison outcome together with the version
+    /// tag and downloadable assets so <c>--upgrade</c> can fetch the matching archive.
+    /// </summary>
+    internal static async Task<SelfUpdateInfo> FetchLatestReleaseAsync(IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
     {
         try
         {
@@ -44,7 +62,7 @@ public static class SelfUpdateChecker
 
             if (!response.IsSuccessStatusCode)
             {
-                return SelfUpdateResult.CheckFailed;
+                return new SelfUpdateInfo(SelfUpdateResult.CheckFailed, null, [], null);
             }
 
             var release = await response.Content
@@ -55,27 +73,30 @@ public static class SelfUpdateChecker
 
             if (string.IsNullOrWhiteSpace(latestTag))
             {
-                return SelfUpdateResult.CheckFailed;
+                return new SelfUpdateInfo(SelfUpdateResult.CheckFailed, null, [], null);
             }
 
-            if (VersionComparer.IsNewer(CurrentVersion, latestTag))
-            {
-                var url = $"{ReleasesUrl}v{latestTag}";
-                Console.WriteLine();
-                Console.WriteLine($"\e[33m⚡ A new version of apps is available: v{latestTag} (current: v{CurrentVersion})\e[0m");
-                Console.WriteLine($"\e[33m   {url}\e[0m");
-                return SelfUpdateResult.UpdateAvailable;
-            }
+            IReadOnlyList<ReleaseAsset> assets = release!.Assets ?? [];
+            var result = VersionComparer.IsNewer(CurrentVersion, latestTag)
+                ? SelfUpdateResult.UpdateAvailable
+                : SelfUpdateResult.UpToDate;
 
-            return SelfUpdateResult.UpToDate;
+            return new SelfUpdateInfo(result, latestTag, assets, release.Body);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Self-update check is best-effort; swallow failures silently.
-            return SelfUpdateResult.CheckFailed;
+            return new SelfUpdateInfo(SelfUpdateResult.CheckFailed, null, [], null);
         }
     }
 }
+
+/// <summary>Result of a latest-release lookup: the comparison outcome, version tag, assets, and changelog body.</summary>
+internal readonly record struct SelfUpdateInfo(
+    SelfUpdateResult Result,
+    string? LatestVersion,
+    IReadOnlyList<ReleaseAsset> Assets,
+    string? Changelog);
 
 /// <summary>Outcome of a self-update check against GitHub Releases.</summary>
 public enum SelfUpdateResult
@@ -90,7 +111,18 @@ public enum SelfUpdateResult
 
 internal sealed record SelfUpdateRelease(
     [property: JsonPropertyName("tag_name")]
-    string? TagName);
+    string? TagName,
+    [property: JsonPropertyName("body")]
+    string? Body,
+    [property: JsonPropertyName("assets")]
+    ReleaseAsset[]? Assets);
+
+/// <summary>A single downloadable asset attached to a GitHub release.</summary>
+internal sealed record ReleaseAsset(
+    [property: JsonPropertyName("name")]
+    string? Name,
+    [property: JsonPropertyName("browser_download_url")]
+    string? DownloadUrl);
 
 [JsonSerializable(typeof(SelfUpdateRelease))]
 internal sealed partial class SelfUpdateJsonContext : JsonSerializerContext;

@@ -46,6 +46,9 @@ internal static class Program
         services.AddAllComponents();
         services.AddAuditComponent();
 
+        // Self-update download client: generous timeouts for streaming the multi-MB release archive.
+        services.AddCheckerClient("github-download", "https://github.com", 4, totalTimeoutSeconds: 300, attemptTimeoutSeconds: 120);
+
         services.AddSingleton<ScanOrchestrator>();
         services.AddSingleton<CheckOrchestrator>();
         services.AddSingleton<Orchestrator>();

@@ -43,9 +43,9 @@ public static class UpdateCommand
         Description = "Install \"apps\" to /usr/local/bin so it can be run from anywhere"
     };
 
-    private static readonly Option<bool> OPTION_upgrade = new("--upgrade")
+    private static readonly Option<bool> OPTION_upgrade = new("--upgrade", "-u")
     {
-        Description = "Check if a newer version of apps is available"
+        Description = "Update apps to the latest version if a newer one is available"
     };
 
     private static readonly Option<bool> OPTION_version = new("--version", "-v")
@@ -98,16 +98,21 @@ public static class UpdateCommand
             {
                 Console.WriteLine($"apps v{SelfUpdateChecker.CurrentVersion}");
                 var httpFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
-                var upgradeResult = await SelfUpdateChecker.CheckForUpdateAsync(httpFactory, cancellationToken);
+                var info = await SelfUpdateChecker.FetchLatestReleaseAsync(httpFactory, cancellationToken);
 
-                switch (upgradeResult)
+                switch (info.Result)
                 {
                     case SelfUpdateResult.UpToDate:
                         Console.WriteLine($"\e[32m✓ You're on the latest version.\e[0m");
-                        break;
+                        return 0;
                     case SelfUpdateResult.CheckFailed:
                         Console.WriteLine("Couldn't check for updates — try again later.");
-                        break;
+                        return 1;
+                    case SelfUpdateResult.UpdateAvailable:
+                        Console.WriteLine($"\e[33m⚡ A new version is available: v{info.LatestVersion} (current: v{SelfUpdateChecker.CurrentVersion})\e[0m");
+                        PrintChangelog(info.Changelog);
+                        var upgraded = await SelfUpdater.PerformUpgradeAsync(httpFactory, info, cancellationToken);
+                        return upgraded ? 0 : 1;
                 }
 
                 return 0;
@@ -205,5 +210,23 @@ public static class UpdateCommand
             Console.Error.WriteLine($"Permission denied. Try: sudo {currentExe} --install");
             return 1;
         }
+    }
+
+    /// <summary>Prints the release changelog (the GitHub release body) under a dim header, when present.</summary>
+    private static void PrintChangelog(string? changelog)
+    {
+        if (string.IsNullOrWhiteSpace(changelog))
+        {
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(AnsiStyle.Bold("What's new:"));
+        foreach (var line in changelog.ReplaceLineEndings("\n").Trim('\n').Split('\n'))
+        {
+            Console.WriteLine(AnsiStyle.Dim($"  {line}"));
+        }
+
+        Console.WriteLine();
     }
 }

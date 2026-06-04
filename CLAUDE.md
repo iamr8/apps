@@ -52,7 +52,7 @@ apps --dry-run | -d         # scan only — show discovered apps without checkin
 apps --pin | -p <name>      # pin a package at its current version (suppresses update notifications)
 apps --unpin <name>         # remove a pin from a package
 apps --install              # install "apps" to /usr/local/bin so it can be run from anywhere
-apps --upgrade              # check if a newer version of apps is available
+apps --upgrade | -u         # update "apps" to the latest version if a newer one is available
 apps --version | -v         # show the current version of apps
 ```
 
