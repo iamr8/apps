@@ -85,8 +85,14 @@ public sealed partial class MacApplicationsScanner(
     public async IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var resolvedApps = new List<AppRecord>();
+        var erroredApps = new HashSet<AppRecord>();
         await foreach (var (app, resolved, error) in apps.WhenAll<AppRecord, (AppRecord App, bool Resolved, bool Error)>(onPublication: CheckAppAsync, cancellationToken: cancellationToken))
         {
+            if (error)
+            {
+                erroredApps.Add(app);
+            }
+
             if (!resolved)
             {
                 continue;
@@ -99,23 +105,27 @@ public sealed partial class MacApplicationsScanner(
         var unresolvedApps = apps.Where(a => !resolvedApps.Any(r => r.App.Name.Equals(a.App.Name, StringComparison.OrdinalIgnoreCase))).ToList();
         await foreach (var (app, resolved, error) in unresolvedApps.WhenAll<AppRecord, (AppRecord App, bool Resolved, bool Error)>(onPublication: CheckHomebrewAsync, cancellationToken: cancellationToken))
         {
+            if (error)
+            {
+                erroredApps.Add(app);
+            }
+
             if (!resolved)
             {
                 continue;
             }
 
+            erroredApps.Remove(app); // a later pass resolved it — no longer counts as a failed check
             resolvedApps.Add(app);
             yield return (app, error);
         }
 
         unresolvedApps = apps.Except(resolvedApps).ToList();
-        if (unresolvedApps.Count > 0)
+        foreach (var record in unresolvedApps)
         {
-            foreach (var record in unresolvedApps)
-            {
-                logger.LogDebug("Failed to resolve update information for {AppName}, skipping", record.App.Name);
-                yield return (record, false);
-            }
+            var errored = erroredApps.Contains(record);
+            logger.LogDebug("Failed to resolve update information for {AppName}, skipping (errored: {Errored})", record.App.Name, errored);
+            yield return (record, errored);
         }
     }
 
@@ -147,7 +157,7 @@ public sealed partial class MacApplicationsScanner(
             record.App.LatestVersion = tuple.Value.LatestVersion;
             await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             await writer.WriteAsync((record, false, true), cancellationToken).ConfigureAwait(false);
         }
@@ -211,7 +221,7 @@ public sealed partial class MacApplicationsScanner(
             logger.LogDebug("No update information found for {AppName}", record.App.Name);
             await writer.WriteAsync((record, false, false), cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             await writer.WriteAsync((record, false, true), cancellationToken).ConfigureAwait(false);
         }

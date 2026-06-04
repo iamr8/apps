@@ -45,6 +45,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
     public async IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         string? latestGoVersion = null;
+        var sdkVersionFetchFailed = false;
         try
         {
             latestGoVersion = await FetchLatestGoSdkVersionAsync(cancellationToken).ConfigureAwait(false);
@@ -52,6 +53,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Failed to fetch latest Go SDK version");
+            sdkVersionFetchFailed = true;
         }
 
         var moduleApps = new List<AppRecord>();
@@ -64,7 +66,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
                     record.App.LatestVersion = latestGoVersion;
                 }
 
-                yield return (record, false);
+                yield return (record, sdkVersionFetchFailed);
             }
             else if (record.App.Attribute.HasFlag(AppAttribute.Library) && record.App.UpdateInfo is not null)
             {

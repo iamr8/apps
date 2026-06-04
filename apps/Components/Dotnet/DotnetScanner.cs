@@ -53,6 +53,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
     public async IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         DotnetReleasesIndex? releasesIndex = null;
+        var releasesIndexFetchFailed = false;
         try
         {
             using var client = httpClientFactory.CreateClient("dotnet-releases");
@@ -62,6 +63,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Failed to fetch .NET releases index");
+            releasesIndexFetchFailed = true;
         }
 
         var nugets = new List<AppRecord>();
@@ -75,7 +77,9 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
             {
                 if (releasesIndex?.ReleasesIndex is null || record.App.InstalledVersion is null)
                 {
-                    yield return (record, false);
+                    // Fetch failure → the check could not run, count it as an error;
+                    // a merely-missing installed version is not an error.
+                    yield return (record, releasesIndexFetchFailed);
                     continue;
                 }
 
