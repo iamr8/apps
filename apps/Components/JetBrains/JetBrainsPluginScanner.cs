@@ -33,7 +33,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
         var root = OperatingSystem.IsMacOS()
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "JetBrains")
             : OperatingSystem.IsWindows()
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local", "JetBrains")
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "JetBrains")
                 : null;
         if (root is null)
         {
