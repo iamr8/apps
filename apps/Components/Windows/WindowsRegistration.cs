@@ -1,11 +1,13 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Runtime.Versioning;
 
 namespace apps.Components.Windows;
 
-/// <summary>Registers macOS-native scanners (Applications, Software Update, Safari, Chrome, Xcode) and the macOS update checker.</summary>
+/// <summary>Registers Windows-native scanners.</summary>
 public static class WindowsRegistration
 {
-    /// <summary>Adds all macOS-native scanners and the Software Update checker.</summary>
+    /// <summary>Adds all Windows-native scanners.</summary>
+    [SupportedOSPlatform("windows")]
     public static IServiceCollection AddWindows(this IServiceCollection services)
     {
         services.AddSingleton<IScanner, WindowsApplicationsScanner>();
