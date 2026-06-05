@@ -52,7 +52,7 @@ internal static class AnsiStyle
         var empty = width - filled;
         var pct = (int)(fraction * 100);
 
-        var filledStr = new string('━', filled);
+        var filledStr = new string(OperatingSystem.IsWindows() ? '█' : '━', filled);
         var emptyStr = new string('─', empty);
 
         if (!IsAnsi)
