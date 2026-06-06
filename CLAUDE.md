@@ -100,6 +100,13 @@ Key setup details:
 
 CI runs the suite on every push/PR via `.github/workflows/ci.yml` (`dotnet test`).
 
+## Architecture Decision Records (ADR)
+
+The `adr/` folder at the repository root holds Architecture Decision Records — design discussions and
+decisions about the tool's architecture. Files are numbered in order (`01-...`, `02-...`). Consult them
+for the rationale behind a design, and add a new record when making or proposing a significant
+architectural decision.
+
 ## Conventions & Guidelines
 
 ### Documentation
