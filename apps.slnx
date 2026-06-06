@@ -7,4 +7,5 @@
     <File Path="VERSION" />
   </Folder>
   <Project Path="apps\apps.csproj" />
+  <Project Path="apps.Tests\apps.Tests.csproj" />
 </Solution>
