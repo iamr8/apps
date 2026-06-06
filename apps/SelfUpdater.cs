@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
@@ -62,8 +63,25 @@ internal static class SelfUpdater
             return false;
         }
 
-        var targetDir = Path.GetDirectoryName(targetPath)!;
-        var tempBinaryPath = Path.Combine(targetDir, $".apps.upgrade.{Environment.ProcessId}.tmp");
+        // Replacing the binary in a system location (e.g. /usr/local/bin) needs root. Ask for it
+        // up front — before the download — so the password prompt doesn't ambush the user mid-upgrade.
+        var requiresElevation = RequiresElevation(targetPath);
+        if (requiresElevation)
+        {
+            Console.WriteLine(AnsiStyle.Yellow($"🔒 Updating {targetPath} requires administrator privileges."));
+            Console.WriteLine("Asking for permission…");
+
+            if (!await TryAcquireSudoAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await Console.Error.WriteLineAsync("Permission was not granted — upgrade cancelled.").ConfigureAwait(false);
+                return false;
+            }
+        }
+
+        // When elevation is needed the target directory isn't writable, so stage the download in a
+        // user-writable temp directory and move it into place with sudo afterwards.
+        var stagingDir = requiresElevation ? Path.GetTempPath() : Path.GetDirectoryName(targetPath)!;
+        var tempBinaryPath = Path.Combine(stagingDir, $".apps.upgrade.{Environment.ProcessId}.tmp");
 
         try
         {
@@ -78,9 +96,16 @@ internal static class SelfUpdater
 
             File.SetUnixFileMode(tempBinaryPath, ExecutableMode);
 
-            // Atomic swap: rename the freshly-extracted binary over the running executable.
-            // The running process keeps the old inode; the new file is used on the next launch.
-            File.Move(tempBinaryPath, targetPath, overwrite: true);
+            if (requiresElevation)
+            {
+                await MoveWithElevationAsync(tempBinaryPath, targetPath, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // Atomic swap: rename the freshly-extracted binary over the running executable.
+                // The running process keeps the old inode; the new file is used on the next launch.
+                File.Move(tempBinaryPath, targetPath, overwrite: true);
+            }
 
             Console.WriteLine($"\e[32m✓ Updated to v{info.LatestVersion}. Restart 'apps' to use the new version.\e[0m");
             return true;
@@ -169,6 +194,92 @@ internal static class SelfUpdater
         }
 
         return Path.GetFullPath(exe);
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when replacing the binary at <paramref name="targetPath"/> needs
+    /// elevated privileges. Determined by probing whether the containing directory is writable by the
+    /// current user — overwriting the file is a directory rename, so directory write access is what matters.
+    /// </summary>
+    private static bool RequiresElevation(string targetPath)
+    {
+        var dir = Path.GetDirectoryName(targetPath)!;
+        var probePath = Path.Combine(dir, $".apps.permcheck.{Environment.ProcessId}.tmp");
+
+        try
+        {
+            using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+
+            File.Delete(probePath);
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Prompts for administrator privileges via <c>sudo -v</c>, which validates and caches the
+    /// credential so the later privileged move runs without a second prompt. Returns
+    /// <see langword="true"/> when the credential was granted.
+    /// </summary>
+    private static Task<bool> TryAcquireSudoAsync(CancellationToken cancellationToken)
+    {
+        return RunInteractiveAsync("sudo", ["-v"], cancellationToken);
+    }
+
+    /// <summary>Moves the staged binary over the target path using cached <c>sudo</c> credentials.</summary>
+    private static async Task MoveWithElevationAsync(
+        string source,
+        string target,
+        CancellationToken cancellationToken)
+    {
+        if (!await RunInteractiveAsync("sudo", ["mv", "-f", source, target], cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException($"Failed to move the new binary into {target} with elevated privileges.");
+        }
+    }
+
+    /// <summary>
+    /// Runs a child process with the parent's terminal inherited (no stdio redirection, no timeout) so
+    /// interactive prompts such as <c>sudo</c>'s password challenge reach the user. Returns
+    /// <see langword="true"/> when the process exits with code 0.
+    /// </summary>
+    /// <remarks>
+    /// This deliberately bypasses <c>ProcessRunner</c>: that runner redirects stdout/stderr and enforces
+    /// a 60-second timeout, both of which break an interactive password prompt that must own the TTY.
+    /// </remarks>
+    private static async Task<bool> RunInteractiveAsync(
+        string exe,
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = exe,
+            UseShellExecute = false
+        };
+
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        using var proc = Process.Start(startInfo);
+        if (proc is null)
+        {
+            return false;
+        }
+
+        await proc.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        return proc.ExitCode == 0;
     }
 
     private static void TryDelete(string path)
