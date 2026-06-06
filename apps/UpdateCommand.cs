@@ -120,7 +120,7 @@ public static class UpdateCommand
 
             if (parseResult.GetValue(OPTION_install))
             {
-                return HandleInstallToShell();
+                return await HandleInstallToShellAsync(cancellationToken);
             }
 
             var pinArg = parseResult.GetValue(OPTION_pin);
@@ -176,13 +176,13 @@ public static class UpdateCommand
         });
     }
 
-    private static int HandleInstallToShell()
+    private static async Task<int> HandleInstallToShellAsync(CancellationToken cancellationToken)
     {
         var currentExe = Environment.ProcessPath;
 
         if (string.IsNullOrEmpty(currentExe))
         {
-            Console.Error.WriteLine("Error: could not determine the current executable path.");
+            await Console.Error.WriteLineAsync("Error: could not determine the current executable path.");
             return 1;
         }
 
@@ -190,6 +190,22 @@ public static class UpdateCommand
         {
             Console.WriteLine($"Already installed at {InstallPath}.");
             return 0;
+        }
+
+        // Installing into /usr/local/bin needs root. Ask for it up front, before copying, so the
+        // password prompt doesn't ambush the user — and only when the location isn't already writable.
+        if (Elevation.RequiresElevation(InstallPath))
+        {
+            Console.WriteLine(AnsiStyle.Yellow($"🔒 Installing to {InstallPath} requires administrator privileges."));
+            Console.WriteLine("Asking for permission…");
+
+            if (!await Elevation.TryAcquireSudoAsync(cancellationToken))
+            {
+                await Console.Error.WriteLineAsync("Permission was not granted — install cancelled.");
+                return 1;
+            }
+
+            return await InstallWithElevationAsync(currentExe, cancellationToken);
         }
 
         try
@@ -201,15 +217,36 @@ public static class UpdateCommand
                 UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
                 UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
 #pragma warning restore CA1416
-            Console.WriteLine($"Installed to {InstallPath}");
-            Console.WriteLine("You can now run 'apps' from any directory.");
+            PrintInstalled();
             return 0;
         }
         catch (UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"Permission denied. Try: sudo {currentExe} --install");
+            await Console.Error.WriteLineAsync($"Permission denied. Try: sudo {currentExe} --install");
             return 1;
         }
+    }
+
+    /// <summary>Copies the running binary into <see cref="InstallPath"/> with cached <c>sudo</c> credentials.</summary>
+    private static async Task<int> InstallWithElevationAsync(string currentExe, CancellationToken cancellationToken)
+    {
+        var installDir = Path.GetDirectoryName(InstallPath)!;
+
+        if (!await Elevation.RunInteractiveAsync("sudo", ["mkdir", "-p", installDir], cancellationToken) ||
+            !await Elevation.RunInteractiveAsync("sudo", ["install", "-m", "755", currentExe, InstallPath], cancellationToken))
+        {
+            await Console.Error.WriteLineAsync($"Failed to install to {InstallPath} with elevated privileges.");
+            return 1;
+        }
+
+        PrintInstalled();
+        return 0;
+    }
+
+    private static void PrintInstalled()
+    {
+        Console.WriteLine($"Installed to {InstallPath}");
+        Console.WriteLine("You can now run 'apps' from any directory.");
     }
 
     /// <summary>Prints the release changelog (the GitHub release body) under a dim header, when present.</summary>
