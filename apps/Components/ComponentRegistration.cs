@@ -6,6 +6,7 @@ using apps.Components.JetBrains;
 using apps.Components.MacOs;
 using apps.Components.Node;
 using apps.Components.VsCode;
+using apps.Components.Windows;
 
 using Microsoft.Extensions.DependencyInjection;
 
@@ -27,10 +28,8 @@ public static class ComponentRegistration
         services.AddDocker();
         services.AddVsCode();
         services.AddJetBrains();
-        // services.AddGitHub();
         services.AddMacOs();
-        // services.AddWindows();
-        // services.AddSwift();
+        services.AddWindows();
         services.AddChrome();
         return services;
     }
