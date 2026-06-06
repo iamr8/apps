@@ -87,7 +87,10 @@ public static class VersionComparer
         var prePart = dashIdx >= 0 ? noMeta[(dashIdx + 1)..] : null;
 
         var parts = corePart.Split('.');
-        if (parts.Length < 2) return false;
+        // SemVer cores have at most three numeric components. A 4-part numeric core
+        // (e.g. "1.2.3.4") is a System.Version, not SemVer — reject it here so the
+        // System.Version path can compare the 4th component instead of silently dropping it.
+        if (parts.Length is < 2 or > 3) return false;
         if (!int.TryParse(parts[0], out var major)) return false;
         if (!int.TryParse(parts[1], out var minor)) return false;
         var patch = 0;
