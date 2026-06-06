@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Xml;
 
 using apps.Components.MacOs;
@@ -406,7 +407,7 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
                 "string" => new Plist(node.InnerText),
                 "true" => new Plist(true),
                 "false" => new Plist(false),
-                "integer" or "real" => new Plist(decimal.Parse(node.InnerText)),
+                "integer" or "real" => new Plist(decimal.Parse(node.InnerText, CultureInfo.InvariantCulture)),
                 "data" or "date" => new Plist(node.InnerText),
                 _ => throw new FormatException($"Unsupported plist value type: <{node.Name}>")
             };
