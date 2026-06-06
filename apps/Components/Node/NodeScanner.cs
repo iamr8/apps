@@ -243,10 +243,10 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
             yield break;
         }
 
-        JsonDocument doc;
+        List<(string Name, string? Version)> packages;
         try
         {
-            doc = JsonDocument.Parse(result.StandardOutput);
+            packages = ParseGlobalPackages(result.StandardOutput);
         }
         catch (JsonException ex)
         {
@@ -254,42 +254,54 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
             yield break;
         }
 
-        using (doc)
+        foreach (var (packageName, version) in packages)
         {
-            if (!doc.RootElement.TryGetProperty("dependencies", out var deps))
+            yield return new DiscoveredApp(this,
+                packageName,
+                new AppIdentifier(Name, "npm", "Global Package"),
+                AppKind.DevTool)
             {
-                yield break;
-            }
-
-            foreach (var entry in deps.EnumerateObject())
-            {
-                var packageName = entry.Name;
-                string? version = null;
-
-                if (entry.Value.TryGetProperty("version", out var verProp))
-                {
-                    version = verProp.GetString();
-                }
-
-                yield return new DiscoveredApp(this,
-                    packageName,
-                    new AppIdentifier(Name, "npm", "Global Package"),
-                    AppKind.DevTool)
-                {
-                    PackageId = packageName,
-                    InstalledVersion = version,
-                    Attribute = AppAttribute.DevTool | AppAttribute.Library,
-                    UpdateInfo = packageName,
-                };
-            }
+                PackageId = packageName,
+                InstalledVersion = version,
+                Attribute = AppAttribute.DevTool | AppAttribute.Library,
+                UpdateInfo = packageName,
+            };
         }
+    }
+
+    /// <summary>
+    /// Parses the <c>dependencies</c> object of <c>npm list -g --json</c> output into
+    /// (name, version) pairs. Throws <see cref="JsonException"/> on malformed JSON.
+    /// </summary>
+    internal static List<(string Name, string? Version)> ParseGlobalPackages(string json)
+    {
+        var packages = new List<(string Name, string? Version)>();
+
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("dependencies", out var deps))
+        {
+            return packages;
+        }
+
+        foreach (var entry in deps.EnumerateObject())
+        {
+            string? version = null;
+            if (entry.Value.TryGetProperty("version", out var verProp))
+            {
+                version = verProp.GetString();
+            }
+
+            packages.Add((entry.Name, version));
+        }
+
+        return packages;
     }
 
     /// <summary>
     /// Builds the registry path for a package name, URL-encoding the '/' in scoped
     /// packages so that <c>@scope/name</c> becomes <c>/@scope%2Fname/latest</c>.
     /// </summary>
-    private static string BuildRegistryPath(string packageName)
+    internal static string BuildRegistryPath(string packageName)
     {
         if (!packageName.StartsWith('@'))
         {

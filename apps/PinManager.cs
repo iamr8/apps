@@ -9,11 +9,21 @@ namespace apps;
 /// </summary>
 public sealed class PinManager
 {
-    private static readonly string PinFilePath = Path.Combine(
+    private static readonly string DefaultPinFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".local", "share", "apps", "pinned.json");
 
+    private readonly string _pinFilePath;
+
     private Dictionary<string, PinEntry>? _pins;
+
+    /// <summary>Creates a pin manager backed by the default user pin file.</summary>
+    public PinManager() : this(DefaultPinFilePath)
+    {
+    }
+
+    /// <summary>Creates a pin manager backed by a specific pin file. Used by tests to isolate state.</summary>
+    internal PinManager(string pinFilePath) => _pinFilePath = pinFilePath;
 
     /// <summary>Loads the pin file from disk. Safe to call multiple times.</summary>
     public async Task LoadAsync(CancellationToken cancellationToken = default)
@@ -23,13 +33,13 @@ public sealed class PinManager
             return;
         }
 
-        if (!File.Exists(PinFilePath))
+        if (!File.Exists(_pinFilePath))
         {
             _pins = new Dictionary<string, PinEntry>(StringComparer.OrdinalIgnoreCase);
             return;
         }
 
-        await using var stream = File.OpenRead(PinFilePath);
+        await using var stream = File.OpenRead(_pinFilePath);
         var data = await JsonSerializer.DeserializeAsync(stream, PinJsonContext.Default.PinFile, cancellationToken).ConfigureAwait(false);
 
         _pins = new Dictionary<string, PinEntry>(StringComparer.OrdinalIgnoreCase);
@@ -83,11 +93,11 @@ public sealed class PinManager
 
     private async Task SaveAsync(CancellationToken cancellationToken)
     {
-        var dir = Path.GetDirectoryName(PinFilePath)!;
+        var dir = Path.GetDirectoryName(_pinFilePath)!;
         Directory.CreateDirectory(dir);
 
         var data = new PinFile { Pins = _pins!.Values.ToArray() };
-        await using var stream = File.Create(PinFilePath);
+        await using var stream = File.Create(_pinFilePath);
         await JsonSerializer.SerializeAsync(stream, data, PinJsonContext.Default.PinFile, cancellationToken).ConfigureAwait(false);
     }
 }
