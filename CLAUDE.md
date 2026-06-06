@@ -12,6 +12,7 @@ for available updates. All state is in-memory only — every run re-scans and re
 | CLI framework      | `System.CommandLine`                         |
 | HTTP               | `System.Net.Http.HttpClient` (typed clients) |
 | JSON               | `System.Text.Json`                           |
+| Testing            | `TUnit` · `Microsoft.Testing.Platform`       |
 
 ## Architecture & Key Conventions
 
@@ -69,6 +70,35 @@ cd apps
 dotnet run
 dotnet run -- -a
 ```
+
+## Testing
+
+```bash
+dotnet test                                  # run the whole suite
+dotnet test --project apps.Tests/apps.Tests.csproj   # run only the test project
+```
+
+Key setup details:
+
+- **MTP opt-in** — `global.json` at the repo root sets `test.runner = "Microsoft.Testing.Platform"`.
+  This is required for `dotnet test` to drive TUnit on the .NET 10 SDK; without it `dotnet test`
+  fails with the legacy VSTest error.
+- **Project reference** — the main project's `SelfContained` is gated on a `RuntimeIdentifier`
+  being present (`Condition="'$(RuntimeIdentifier)' != ''"`), so a plain `dotnet build` (and the
+  test-project reference) stays framework-dependent while `publish.sh` / `release.yml` (which pass
+  `-r <RID>`) still produce self-contained AOT binaries. `InternalsVisibleTo("apps.Tests")` exposes
+  `internal` helpers to the tests.
+- **Test doubles** — hand-rolled fakes under `apps.Tests/Fakes/` (`FakeProcessRunner`,
+  `StubHttpMessageHandler` + `StubHttpClientFactory`, `FakeScanner`). No mocking library.
+- **Seams** — when discovery/parsing logic is entangled with the filesystem or PATH, extract the
+  pure part into an `internal static` method and test that directly (e.g.
+  `NodeScanner.ParseGlobalPackages` / `BuildRegistryPath`). Inject file paths via constructor where
+  a type writes to a fixed location (e.g. `PinManager`'s internal path-taking constructor).
+- **Assertions are awaited** — TUnit uses `await Assert.That(actual).IsEqualTo(expected)`.
+  Tests run under the machine's real culture (not `InvariantGlobalization`), so they also catch
+  locale-dependent parsing bugs — always parse/format with `CultureInfo.InvariantCulture`.
+
+CI runs the suite on every push/PR via `.github/workflows/ci.yml` (`dotnet test`).
 
 ## Conventions & Guidelines
 
