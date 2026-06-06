@@ -466,6 +466,20 @@ public sealed partial class MacApplicationsScanner(
         var result = await runner.RunAsync(swuPath, "--list --all", cancellationToken);
         var output = result.StandardOutput + result.StandardError;
 
+        foreach (var (label, version) in ParseSoftwareUpdates(output))
+        {
+            yield return MakeSoftwareUpdateEntry(label, version);
+        }
+    }
+
+    /// <summary>
+    /// Parses the textual output of <c>softwareupdate --list --all</c> into label/version pairs.
+    /// Each pending update is delimited by a <c>* Label:</c> (or <c>** Label:</c>) line; the
+    /// optional version is read from a following <c>Version:</c> line. Pure and deterministic.
+    /// </summary>
+    internal static List<(string Label, string? Version)> ParseSoftwareUpdates(string output)
+    {
+        var entries = new List<(string Label, string? Version)>();
         string? currentLabel = null;
         string? currentVersion = null;
 
@@ -479,7 +493,7 @@ public sealed partial class MacApplicationsScanner(
             {
                 if (currentLabel is not null)
                 {
-                    yield return MakeSoftwareUpdateEntry(currentLabel, currentVersion);
+                    entries.Add((currentLabel, currentVersion));
                 }
 
                 var labelIdx = line.IndexOf("Label:", StringComparison.OrdinalIgnoreCase);
@@ -496,8 +510,10 @@ public sealed partial class MacApplicationsScanner(
 
         if (currentLabel is not null)
         {
-            yield return MakeSoftwareUpdateEntry(currentLabel, currentVersion);
+            entries.Add((currentLabel, currentVersion));
         }
+
+        return entries;
     }
 
     private DiscoveredApp MakeSoftwareUpdateEntry(string label, string? version)
@@ -513,7 +529,12 @@ public sealed partial class MacApplicationsScanner(
         };
     }
 
-    private static string? ExtractVersionFromSoftwareUpdateLine(string line)
+    /// <summary>
+    /// Reads the version token from a single <c>softwareupdate</c> output line containing a
+    /// <c>Version:</c> marker, stopping at the first comma (e.g. <c>"Version: 13.5, Size: …"</c>
+    /// yields <c>13.5</c>). Returns <see langword="null"/> when no marker is present.
+    /// </summary>
+    internal static string? ExtractVersionFromSoftwareUpdateLine(string line)
     {
         const string marker = "Version:";
         var idx = line.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
@@ -822,7 +843,7 @@ public sealed partial class MacApplicationsScanner(
     /// App Store product page. Scans for the first <c>primarySubtitle</c> carrying a version number
     /// (the "What's New" entry). Returns <c>null</c> when the blob or a version cannot be found.
     /// </summary>
-    private static string? ExtractMostRecentVersion(string html)
+    internal static string? ExtractMostRecentVersion(string html)
     {
         const string marker = "id=\"serialized-server-data\">";
         var start = html.IndexOf(marker, StringComparison.Ordinal);
@@ -941,21 +962,30 @@ public sealed partial class MacApplicationsScanner(
     /// </summary>
     private BrewInfoRoot? ParseBrewInfo(ProcessResult result)
     {
-        if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
-        {
-            return null;
-        }
-
         try
         {
-            var info = JsonSerializer.Deserialize(result.StandardOutput, MacOsApplicationsJsonContext.Default.BrewInfoRoot);
-            return info;
+            return ParseBrewInfo(result.StandardOutput, result.Success);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogDebug(ex, "Failed to parse 'brew info --json=v2 --installed' output");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Deserializes <c>brew info --json=v2 --installed</c> stdout into a <see cref="BrewInfoRoot"/>.
+    /// Returns <see langword="null"/> when the command failed or produced no output. Throws
+    /// <see cref="JsonException"/> on malformed JSON so callers can decide how to report it.
+    /// </summary>
+    internal static BrewInfoRoot? ParseBrewInfo(string? standardOutput, bool success)
+    {
+        if (!success || string.IsNullOrWhiteSpace(standardOutput))
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize(standardOutput, MacOsApplicationsJsonContext.Default.BrewInfoRoot);
     }
 
     private async Task<PlistInfo?> GetPlistInfo(string bundlePath, CancellationToken cancellationToken)
@@ -973,12 +1003,20 @@ public sealed partial class MacApplicationsScanner(
         return plist;
     }
 
-    private static string? Normalize(string? value)
+    /// <summary>
+    /// Trims, NFC-normalizes, and strips left-to-right marks from a plist-derived string so names
+    /// and versions compare and render consistently. Returns <see langword="null"/> for null input.
+    /// </summary>
+    internal static string? Normalize(string? value)
     {
         return value?.Trim().Normalize(NormalizationForm.FormC).Replace("\u200E", string.Empty);
     }
 
-    private static string CreateToken(string appName)
+    /// <summary>
+    /// Derives a Homebrew cask token from an app's display name by lowercasing and replacing
+    /// spaces/underscores with hyphens (e.g. <c>"Visual Studio Code"</c> \u2192 <c>"visual-studio-code"</c>).
+    /// </summary>
+    internal static string CreateToken(string appName)
     {
         // "Visual Studio Code" → "visual-studio-code", "1Password" → "1password"
         return string.Create(appName.Length, appName, static (span, src) =>

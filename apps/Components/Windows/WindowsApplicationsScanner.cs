@@ -335,25 +335,37 @@ public sealed class WindowsApplicationsScanner(IProcessRunner runner, ILogger<Wi
     }
 
     /// <summary>
-    /// Parses the fixed-width table emitted by <c>winget list</c> using the header row to locate each
-    /// column. Non-English headers and malformed rows are skipped rather than guessed at.
+    /// Runs the pure <see cref="ParseWingetList(string)"/> parser and merges its packages into
+    /// <paramref name="map"/>, logging when the table header could not be located.
     /// </summary>
     private void ParseWingetList(string output, Dictionary<string, WingetPackage> map)
     {
-        var lines = output.Split('\n');
-
-        var headerIndex = Array.FindIndex(lines, static line =>
-        {
-            var trimmed = line.TrimStart();
-            return trimmed.StartsWith("Name", StringComparison.Ordinal)
-                   && line.Contains("Id", StringComparison.Ordinal)
-                   && line.Contains("Version", StringComparison.Ordinal);
-        });
-
-        if (headerIndex < 0)
+        if (!ContainsWingetHeader(output))
         {
             logger.LogDebug("Could not locate the winget table header; skipping winget enrichment");
             return;
+        }
+
+        foreach (var package in ParseWingetList(output))
+        {
+            map[package.Name] = package;
+        }
+    }
+
+    /// <summary>
+    /// Parses the fixed-width table emitted by <c>winget list</c> using the header row to locate each
+    /// column. Non-English headers and malformed rows are skipped rather than guessed at. When a name
+    /// repeats, the last row seen wins. Returns an empty list when the header cannot be located.
+    /// </summary>
+    internal static List<WingetPackage> ParseWingetList(string output)
+    {
+        var packages = new List<WingetPackage>();
+        var lines = output.Split('\n');
+
+        var headerIndex = Array.FindIndex(lines, IsWingetHeader);
+        if (headerIndex < 0)
+        {
+            return packages;
         }
 
         var header = lines[headerIndex];
@@ -363,7 +375,7 @@ public sealed class WindowsApplicationsScanner(IProcessRunner runner, ILogger<Wi
         var sourceCol = header.IndexOf("Source", StringComparison.Ordinal);
         if (idCol < 0 || versionCol < 0)
         {
-            return;
+            return packages;
         }
 
         var versionEnd = availableCol > 0 ? availableCol : sourceCol > 0 ? sourceCol : int.MaxValue;
@@ -372,9 +384,23 @@ public sealed class WindowsApplicationsScanner(IProcessRunner runner, ILogger<Wi
         {
             if (TryParseWingetRow(lines[i], idCol, versionCol, versionEnd, out var package))
             {
-                map[package.Name] = package;
+                packages.Add(package);
             }
         }
+
+        return packages;
+    }
+
+    /// <summary>Returns whether <paramref name="output"/> contains a recognisable winget table header.</summary>
+    private static bool ContainsWingetHeader(string output) => Array.Exists(output.Split('\n'), IsWingetHeader);
+
+    /// <summary>Returns whether <paramref name="line"/> is the <c>Name Id Version</c> table header row.</summary>
+    private static bool IsWingetHeader(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("Name", StringComparison.Ordinal)
+               && line.Contains("Id", StringComparison.Ordinal)
+               && line.Contains("Version", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -382,7 +408,7 @@ public sealed class WindowsApplicationsScanner(IProcessRunner runner, ILogger<Wi
     /// header. Returns <see langword="false"/> for the separator rule, blank lines, and rows missing a
     /// name or id.
     /// </summary>
-    private static bool TryParseWingetRow(string raw, int idCol, int versionCol, int versionEnd, out WingetPackage package)
+    internal static bool TryParseWingetRow(string raw, int idCol, int versionCol, int versionEnd, out WingetPackage package)
     {
         package = default;
 
@@ -415,7 +441,7 @@ public sealed class WindowsApplicationsScanner(IProcessRunner runner, ILogger<Wi
     /// Extracts the version from <c>winget show</c> key-value output by reading the first
     /// <c>Version:</c> line. Returns <see langword="null"/> when no concrete version is present.
     /// </summary>
-    private static string? ExtractWingetVersion(string output)
+    internal static string? ExtractWingetVersion(string output)
     {
         foreach (var raw in output.Split('\n'))
         {
@@ -458,5 +484,5 @@ public sealed class WindowsApplicationsScanner(IProcessRunner runner, ILogger<Wi
     }
 
     /// <summary>An installed package as reported by <c>winget list</c>.</summary>
-    private readonly record struct WingetPackage(string Name, string Id, string? Version);
+    internal readonly record struct WingetPackage(string Name, string Id, string? Version);
 }

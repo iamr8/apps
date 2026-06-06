@@ -14,6 +14,12 @@ namespace apps.Components.Dotnet;
 public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcessRunner runner, ILogger<DotnetScanner> logger)
     : IScanner
 {
+    /// <summary>
+    /// A parsed .NET component line: an SDK channel, runtime, or global tool. For SDKs and runtimes
+    /// <paramref name="Path"/> is the install directory; for global tools it is the invocation command.
+    /// </summary>
+    internal sealed record DotnetComponent(string Name, string Version, string Path);
+
     private readonly ConcurrentDictionary<string, Task<string?>> _inflightNuget = new(StringComparer.OrdinalIgnoreCase);
 
     private string? _executablePath;
@@ -111,24 +117,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
         var result = await runner.RunAsync(_executablePath!, "--list-runtimes", cancellationToken);
         if (result.Success)
         {
-            var lines = result.StandardOutput.Trim()
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(c =>
-                {
-                    var parts = c.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-                    var name = parts[0];
-                    var version = parts[1];
-                    var path = parts[2].Trim('[', ']');
-                    return new
-                    {
-                        Name = $"{name} {MajorMinor(version)}",
-                        Version = version,
-                        Path = path
-                    };
-                })
-                .GroupBy(l => l.Name) // Group by runtime name (e.g. "Microsoft.AspNetCore.App") to avoid duplicates when multiple versions are installed
-                .Select(g => g.OrderByDescending(c => c.Version, VersionComparer.Instance).First()) // Take the latest version in each group
-                .ToArray();
+            var lines = ParseRuntimes(result.StandardOutput);
             foreach (var line in lines)
             {
                 yield return new DiscoveredApp(this, line.Name,
@@ -153,23 +142,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
         var result = await runner.RunAsync(_executablePath!, "--list-sdks", cancellationToken);
         if (result.Success)
         {
-            var lines = result.StandardOutput.Trim()
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(c =>
-                {
-                    var parts = c.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                    var version = parts[0];
-                    var path = parts[1].Trim('[', ']');
-                    return new
-                    {
-                        Name = MajorMinor(version),
-                        Version = version,
-                        Path = path
-                    };
-                })
-                .GroupBy(l => l.Name)
-                .Select(g => g.OrderByDescending(c => c.Version, VersionComparer.Instance).First()) // Take the latest version in each group
-                .ToArray();
+            var lines = ParseSdks(result.StandardOutput);
             foreach (var line in lines)
             {
                 yield return new DiscoveredApp(this, $".NET {line.Name}",
@@ -193,23 +166,7 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
         var result = await runner.RunAsync(_executablePath!, "tool list -g", cancellationToken);
         if (result.Success)
         {
-            var lines = result.StandardOutput.Trim()
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Skip(2) // Skip header line
-                .Select(c =>
-                {
-                    var parts = c.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-                    var name = parts[0];
-                    var version = parts[1];
-                    var command = parts[2];
-                    return new
-                    {
-                        Name = name,
-                        Version = version,
-                        Command = command
-                    };
-                })
-                .ToArray();
+            var lines = ParseGlobalTools(result.StandardOutput);
             foreach (var line in lines)
             {
                 yield return new DiscoveredApp(this, line.Name,
@@ -276,22 +233,89 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var index = await JsonSerializer.DeserializeAsync(stream, DotnetJsonContext.Default.NugetVersionIndex, cancellationToken).ConfigureAwait(false);
 
-        if (index?.Versions is null or { Length: 0 })
+        return SelectLatestStableVersion(index?.Versions);
+    }
+
+    /// <summary>
+    /// Parses <c>dotnet --list-runtimes</c> output into runtime entries, grouping by the
+    /// <c>name major.minor</c> key and keeping only the latest version in each group.
+    /// </summary>
+    internal static DotnetComponent[] ParseRuntimes(string output)
+    {
+        return output.Trim()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(c =>
+            {
+                var parts = c.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                var name = parts[0];
+                var version = parts[1];
+                var path = parts[2].Trim('[', ']');
+                return new DotnetComponent($"{name} {MajorMinor(version)}", version, path);
+            })
+            .GroupBy(l => l.Name) // Group by runtime name (e.g. "Microsoft.AspNetCore.App") to avoid duplicates when multiple versions are installed
+            .Select(g => g.OrderByDescending(c => c.Version, VersionComparer.Instance).First()) // Take the latest version in each group
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Parses <c>dotnet --list-sdks</c> output into SDK entries named by their <c>major.minor</c>
+    /// channel, keeping only the latest version installed in each channel.
+    /// </summary>
+    internal static DotnetComponent[] ParseSdks(string output)
+    {
+        return output.Trim()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(c =>
+            {
+                var parts = c.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                var version = parts[0];
+                var path = parts[1].Trim('[', ']');
+                return new DotnetComponent(MajorMinor(version), version, path);
+            })
+            .GroupBy(l => l.Name)
+            .Select(g => g.OrderByDescending(c => c.Version, VersionComparer.Instance).First()) // Take the latest version in each group
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Parses <c>dotnet tool list -g</c> output into global tool entries, skipping the two
+    /// header lines. The <c>Path</c> field carries the tool's invocation command.
+    /// </summary>
+    internal static DotnetComponent[] ParseGlobalTools(string output)
+    {
+        return output.Trim()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Skip(2) // Skip header line
+            .Select(c =>
+            {
+                var parts = c.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                return new DotnetComponent(parts[0], parts[1], parts[2]);
+            })
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Returns the latest stable (non-prerelease) version from a NuGet flat-container version
+    /// list, which is sorted oldest-first. Falls back to the last entry when every version is a
+    /// prerelease, and returns <see langword="null"/> when the list is null or empty.
+    /// </summary>
+    internal static string? SelectLatestStableVersion(string[]? versions)
+    {
+        if (versions is null or { Length: 0 })
         {
             return null;
         }
 
-        // Return the last stable version (no prerelease tag)
-        for (var i = index.Versions.Length - 1; i >= 0; i--)
+        for (var i = versions.Length - 1; i >= 0; i--)
         {
-            var v = index.Versions[i];
+            var v = versions[i];
             if (!v.Contains('-', StringComparison.Ordinal))
             {
                 return v;
             }
         }
 
-        return index.Versions[^1];
+        return versions[^1];
     }
 
     /// <summary>

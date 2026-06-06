@@ -278,6 +278,37 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
 
     private DiscoveredApp? ParsePluginXmlString(string xml, string sourcePath)
     {
+        if (ParsePluginXml(xml) is not var (id, name, version, displayId) || displayId is null)
+        {
+            return null;
+        }
+
+        return new DiscoveredApp(this,
+            name ?? displayId,
+            new AppIdentifier(Name, DisplayName, "Plugin"),
+            AppKind.Extension)
+        {
+            PackageId = id,
+            InstalledVersion = version,
+            Path = sourcePath,
+            Attribute = AppAttribute.JetBrainsPlugin,
+            UpdateInfo = displayId,
+        };
+    }
+
+    /// <summary>
+    /// Parses the <c>id</c>, <c>name</c>, and <c>version</c> elements out of a JetBrains
+    /// <c>plugin.xml</c> descriptor.
+    /// </summary>
+    /// <param name="xml">The raw <c>plugin.xml</c> content.</param>
+    /// <returns>
+    /// A tuple of the trimmed identity fields plus the resolved <c>DisplayId</c> (the <c>id</c> when
+    /// present, otherwise the <c>name</c>), or <see langword="null"/> when the XML has no root element
+    /// or carries neither an <c>id</c> nor a <c>name</c>.
+    /// </returns>
+    /// <exception cref="XmlException">The XML is not well-formed.</exception>
+    internal static (string? Id, string? Name, string? Version, string? DisplayId)? ParsePluginXml(string xml)
+    {
         var doc = new XmlDocument();
         doc.LoadXml(xml);
 
@@ -297,16 +328,6 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
             return null;
         }
 
-        return new DiscoveredApp(this,
-            name ?? displayId,
-            new AppIdentifier(Name, DisplayName, "Plugin"),
-            AppKind.Extension)
-        {
-            PackageId = id,
-            InstalledVersion = version,
-            Path = sourcePath,
-            Attribute = AppAttribute.JetBrainsPlugin,
-            UpdateInfo = displayId,
-        };
+        return (id, name, version, displayId);
     }
 }

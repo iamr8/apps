@@ -123,14 +123,7 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, LivePr
                 return;
             }
 
-            var vuls = vulnerabilityMatches
-                .GroupBy(c => c.Aliases.FirstOrDefault() ?? c.Id)
-                .Select(g =>
-                {
-                    var first = g.First();
-                    return new VulnerabilityInfo(g.Key, first.Summary ?? first.Details, first.Severity);
-                })
-                .ToArray();
+            var vuls = ProjectVulnerabilities(vulnerabilityMatches);
 
             var auditResult = new AuditResult(record, vuls);
             await writer.WriteAsync(auditResult, cancellationToken).ConfigureAwait(false);
@@ -195,7 +188,11 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, LivePr
         }
     }
 
-    private static string GetPackageName(AppRecord record)
+    /// <summary>
+    /// Resolves the package name to query OSV with: the resolved <c>UpdateInfo</c> for library
+    /// packages (e.g. the registry id), otherwise the discovered app's display name.
+    /// </summary>
+    internal static string GetPackageName(AppRecord record)
     {
         if (record.App.UpdateInfo is not null && record.App.Attribute.HasFlag(AppAttribute.Library))
         {
@@ -205,7 +202,11 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, LivePr
         return record.App.Name;
     }
 
-    private static string? MapEcosystem(AppRecord record)
+    /// <summary>
+    /// Maps a discovered app's scanner identifier to its OSV ecosystem name, returning an empty
+    /// string when the ecosystem is unconstrained (matches any ecosystem during version checks).
+    /// </summary>
+    internal static string? MapEcosystem(AppRecord record)
     {
         return record.App.Identifier.Name switch
         {
@@ -215,6 +216,22 @@ public sealed class OsvAuditChecker(IHttpClientFactory httpClientFactory, LivePr
             "SwiftPM" => "SwiftURL",
             _ => ""
         };
+    }
+
+    /// <summary>
+    /// Projects matched advisories into the reportable vulnerability list, collapsing duplicates
+    /// that share the same alias (or id) into a single entry and preferring summary over details.
+    /// </summary>
+    internal static VulnerabilityInfo[] ProjectVulnerabilities(IReadOnlyList<VulnerabilityMatch> matches)
+    {
+        return matches
+            .GroupBy(c => c.Aliases.FirstOrDefault() ?? c.Id)
+            .Select(g =>
+            {
+                var first = g.First();
+                return new VulnerabilityInfo(g.Key, first.Summary ?? first.Details, first.Severity);
+            })
+            .ToArray();
     }
 
     private static VulnerabilitySeverity MapSeverity(OsvVulnerability vulnerability)

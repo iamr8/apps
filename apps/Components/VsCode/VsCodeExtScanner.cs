@@ -77,24 +77,7 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
     /// </summary>
     private async Task FetchBatchAsync(AppRecord[] records, ChannelWriter<(AppRecord App, bool Error)> writer, CancellationToken cancellationToken)
     {
-        var criteria = records
-            .Select(c => c.App.PackageId ?? c.App.Name)
-            .Select(id => new VsCodeCriterion { FilterType = FilterTypeExtensionName, Value = id })
-            .ToArray();
-
-        var body = new VsCodeQueryRequest
-        {
-            Filters =
-            [
-                new VsCodeFilter
-                {
-                    Criteria = criteria,
-                    PageSize = records.Length,
-                    PageNumber = 1
-                }
-            ],
-            Flags = QueryFlags
-        };
+        var body = BuildQueryRequest(records);
 
         try
         {
@@ -149,7 +132,12 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
         }
     }
 
-    private static string? GetLatestStableVersion(VsCodeExtVersion[]? versions)
+    /// <summary>
+    /// Returns the newest non-pre-release version from the gallery <paramref name="versions"/>
+    /// list, falling back to the first entry when every version is a pre-release. Returns
+    /// <see langword="null"/> when <paramref name="versions"/> is <see langword="null"/> or empty.
+    /// </summary>
+    internal static string? GetLatestStableVersion(VsCodeExtVersion[]? versions)
     {
         if (versions is null)
         {
@@ -184,6 +172,33 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Builds the Marketplace gallery query body for a batch of <paramref name="records"/>,
+    /// adding one extension-name criterion per record (preferring <see cref="DiscoveredApp.PackageId"/>,
+    /// falling back to <see cref="DiscoveredApp.Name"/>).
+    /// </summary>
+    internal static VsCodeQueryRequest BuildQueryRequest(AppRecord[] records)
+    {
+        var criteria = records
+            .Select(c => c.App.PackageId ?? c.App.Name)
+            .Select(id => new VsCodeCriterion { FilterType = FilterTypeExtensionName, Value = id })
+            .ToArray();
+
+        return new VsCodeQueryRequest
+        {
+            Filters =
+            [
+                new VsCodeFilter
+                {
+                    Criteria = criteria,
+                    PageSize = records.Length,
+                    PageNumber = 1
+                }
+            ],
+            Flags = QueryFlags
+        };
     }
 
     private const string GalleryApiPath = "/_apis/public/gallery/extensionquery?api-version=7.2-preview.1";
@@ -264,16 +279,7 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
     /// </summary>
     private DiscoveredApp? ParseLine(string line, Dictionary<string, string> displayNames)
     {
-        var atIdx = line.LastIndexOf('@');
-        if (atIdx < 0)
-        {
-            return null;
-        }
-
-        var extensionId = line[..atIdx];
-        var version = line[(atIdx + 1)..];
-
-        if (string.IsNullOrWhiteSpace(extensionId))
+        if (ParseExtensionLine(line) is not (var extensionId, var version))
         {
             return null;
         }
@@ -291,5 +297,30 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
             UpdateInfo = extensionId,
             Attribute = AppAttribute.VsCodeExtension
         };
+    }
+
+    /// <summary>
+    /// Splits a <c>code --list-extensions --show-versions</c> line of the form
+    /// <c>publisher.extension-id@1.2.3</c> into its extension ID and version, using the last
+    /// <c>@</c> as the separator. Returns <see langword="null"/> when there is no <c>@</c> or
+    /// the extension ID is blank.
+    /// </summary>
+    internal static (string ExtensionId, string Version)? ParseExtensionLine(string line)
+    {
+        var atIdx = line.LastIndexOf('@');
+        if (atIdx < 0)
+        {
+            return null;
+        }
+
+        var extensionId = line[..atIdx];
+        var version = line[(atIdx + 1)..];
+
+        if (string.IsNullOrWhiteSpace(extensionId))
+        {
+            return null;
+        }
+
+        return (extensionId, version);
     }
 }

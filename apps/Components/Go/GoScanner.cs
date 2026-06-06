@@ -167,8 +167,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
         var result = await runner.RunAsync(_executablePath!, "version", cancellationToken);
         if (result.Success)
         {
-            // "go version go1.22.4 darwin/arm64"
-            var version = result.StandardOutput.Split(' ').First(part => part.StartsWith("go", StringComparison.Ordinal) && part.Length > 2 && char.IsDigit(part[2])).Split("go")[1];
+            var version = ParseSdkVersion(result.StandardOutput);
             yield return new DiscoveredApp(this, "go",
                 new AppIdentifier(Name, DisplayName, "Sdk"),
                 AppKind.DevTool)
@@ -240,30 +239,7 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
                     continue;
                 }
 
-                // Parse the output lines:
-                //   /path/to/binary: go1.22.3
-                //   \tpath\tmodule/path
-                //   \tmod\tmodule/path\tv1.2.3\th1:...
-                string? modulePath = null;
-                string? moduleVersion = null;
-
-                foreach (var line in result.StandardOutput.Split('\n'))
-                {
-                    var trimmed = line.TrimStart('\t');
-                    if (trimmed.StartsWith("path\t", StringComparison.Ordinal))
-                    {
-                        modulePath = trimmed["path\t".Length..].Trim();
-                    }
-                    else if (trimmed.StartsWith("mod\t", StringComparison.Ordinal))
-                    {
-                        var parts = trimmed.Split('\t', StringSplitOptions.RemoveEmptyEntries);
-                        // parts: ["mod", "module/path", "v1.2.3", "h1:..."]
-                        if (parts.Length >= 3)
-                        {
-                            moduleVersion = parts[2].TrimStart('v');
-                        }
-                    }
-                }
+                var (modulePath, moduleVersion) = ParseModuleInfo(result.StandardOutput);
 
                 var displayName = modulePath is not null
                     ? Path.GetFileName(modulePath.TrimEnd('/'))
@@ -285,5 +261,47 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
             logger.LogWarning("'go env GOPATH' failed or returned empty");
             yield break;
         }
+    }
+
+    /// <summary>
+    /// Extracts the Go toolchain version from <c>go version</c> output (e.g.
+    /// <c>"go version go1.22.4 darwin/arm64"</c> yields <c>"1.22.4"</c>).
+    /// </summary>
+    internal static string ParseSdkVersion(string standardOutput) =>
+        standardOutput.Split(' ').First(part => part.StartsWith("go", StringComparison.Ordinal) && part.Length > 2 && char.IsDigit(part[2])).Split("go")[1];
+
+    /// <summary>
+    /// Parses the module path and version from <c>go version -m &lt;binary&gt;</c> output,
+    /// reading the <c>path</c> and <c>mod</c> build-info lines. The version has its leading
+    /// <c>v</c> stripped. Either value is <see langword="null"/> when its line is absent.
+    /// </summary>
+    internal static (string? ModulePath, string? ModuleVersion) ParseModuleInfo(string standardOutput)
+    {
+        // Parse the output lines:
+        //   /path/to/binary: go1.22.3
+        //   \tpath\tmodule/path
+        //   \tmod\tmodule/path\tv1.2.3\th1:...
+        string? modulePath = null;
+        string? moduleVersion = null;
+
+        foreach (var line in standardOutput.Split('\n'))
+        {
+            var trimmed = line.TrimStart('\t');
+            if (trimmed.StartsWith("path\t", StringComparison.Ordinal))
+            {
+                modulePath = trimmed["path\t".Length..].Trim();
+            }
+            else if (trimmed.StartsWith("mod\t", StringComparison.Ordinal))
+            {
+                var parts = trimmed.Split('\t', StringSplitOptions.RemoveEmptyEntries);
+                // parts: ["mod", "module/path", "v1.2.3", "h1:..."]
+                if (parts.Length >= 3)
+                {
+                    moduleVersion = parts[2].TrimStart('v');
+                }
+            }
+        }
+
+        return (modulePath, moduleVersion);
     }
 }

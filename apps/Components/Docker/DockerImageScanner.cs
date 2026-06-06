@@ -191,10 +191,11 @@ public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory
     }
 
     /// <summary>
-    /// Splits an image reference into its Hub namespace, repository, and tag.
-    /// Returns false for private-registry references (host contains a '.' or ':').
+    /// Splits an image reference into its Docker Hub namespace, repository, and tag.
+    /// Official images get the <c>library</c> namespace and a missing tag defaults to <c>latest</c>.
+    /// Returns <see langword="false"/> for private-registry references (host contains a '.' or ':').
     /// </summary>
-    private static bool TryParseImageRef(string imageRef, out string ns, out string repo, out string tag)
+    internal static bool TryParseImageRef(string imageRef, out string ns, out string repo, out string tag)
     {
         ns = repo = tag = string.Empty;
 
