@@ -119,6 +119,7 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
                 var compositeId = $"{publisherName}.{extensionName}";
                 var record = records.First(r => string.Equals(r.App.PackageId, compositeId, StringComparison.OrdinalIgnoreCase) ||
                                                 string.Equals(r.App.Name, compositeId, StringComparison.OrdinalIgnoreCase));
+                record.App.LatestVersion = version;
                 await writer.WriteAsync((record, false)!, cancellationToken).ConfigureAwait(false);
             }
         }

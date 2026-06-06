@@ -154,7 +154,7 @@ public sealed class VsCodeExtScannerTests
     }
 
     [Test]
-    public async Task CheckAsync_SuccessfulBatch_PostsToGalleryAndEmitsMatchedRecord()
+    public async Task CheckAsync_WhenGalleryHasNewerVersion_SetsLatestAndUpdateAvailable()
     {
         const string response = """
                                 {
@@ -178,8 +178,36 @@ public sealed class VsCodeExtScannerTests
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Error).IsFalse();
         await Assert.That(results[0].App).IsSameReferenceAs(record);
+        await Assert.That(record.App.LatestVersion).IsEqualTo("2024.6.0");
+        await Assert.That(record.UpdateAvailable).IsTrue();
         await Assert.That(handler.Requests.Count).IsEqualTo(1);
         await Assert.That(handler.Requests[0].AbsolutePath).IsEqualTo(GalleryPath);
+    }
+
+    [Test]
+    public async Task CheckAsync_WhenUpToDate_SetsLatestWithoutUpdateAvailable()
+    {
+        const string response = """
+                                {
+                                  "results": [
+                                    { "extensions": [
+                                        {
+                                          "extensionName": "python",
+                                          "publisher": { "publisherName": "ms-python" },
+                                          "versions": [ { "version": "2024.6.0" } ]
+                                        }
+                                    ] }
+                                  ]
+                                }
+                                """;
+        var handler = new StubHttpMessageHandler().WithJson(GalleryPath, response);
+        var scanner = CreateScanner(handler);
+        var record = ExtensionRecord(scanner, "ms-python.python", installed: "2024.6.0");
+
+        await Check(scanner, record);
+
+        await Assert.That(record.App.LatestVersion).IsEqualTo("2024.6.0");
+        await Assert.That(record.UpdateAvailable).IsFalse();
     }
 
     [Test]
