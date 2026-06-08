@@ -140,11 +140,10 @@ public sealed partial class MacApplicationsScanner(
                 return;
             }
 
-            var token = CreateToken(record.App.Name);
-            var tuple = await GetLatestVersionByCaskAsync(token, record.App.Path, cancellationToken).ConfigureAwait(false);
+            var tuple = await GetLatestVersionByCaskAsync(record, cancellationToken).ConfigureAwait(false);
             if (tuple is null)
             {
-                logger.LogDebug("No Homebrew information found for {AppName} with token '{Token}'", record.App.Name, token);
+                logger.LogDebug("No Homebrew information found for {AppName}", record.App.Name);
                 await writer.WriteAsync((record, false, false), cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -201,6 +200,14 @@ public sealed partial class MacApplicationsScanner(
             {
                 if (await GetLatestVersionByITunesAsync(record, cancellationToken))
                 {
+                    await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+                else
+                {
+                    // When an app has the App Store attribute, but we fail to get update information from iTunes,
+                    // it may be due to a transient lookup failure or macOS System App (e.g., Safari).
+                    logger.LogDebug("App {AppName} has the App Store attribute but failed to get update information from iTunes, skipping", record.App.Name);
                     await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
                     return;
                 }
@@ -890,8 +897,9 @@ public sealed partial class MacApplicationsScanner(
     /// Queries <c>https://formulae.brew.sh/api/cask/{token}.json</c> for the latest version.
     /// Returns <c>null</c> on any failure (network, 404, parse error).
     /// </summary>
-    private async Task<(string LatestVersion, string? Description)?> GetLatestVersionByCaskAsync(string token, string? appPath, CancellationToken cancellationToken)
+    private async Task<(string LatestVersion, string? Description)?> GetLatestVersionByCaskAsync(AppRecord record, CancellationToken cancellationToken)
     {
+        var token = CreateToken(record.App.Name);
         try
         {
             using var client = httpClientFactory.CreateClient("homebrew-api");
@@ -912,12 +920,15 @@ public sealed partial class MacApplicationsScanner(
 
             foreach (var artifact in result.Artifacts)
             {
-                if (artifact.App?.Any(a => a.Equals(appPath, StringComparison.OrdinalIgnoreCase)) == true)
+                if (artifact.App?.Any(a => a.Equals(record.App.Path, StringComparison.OrdinalIgnoreCase)) == true ||
+                    artifact.App?.Any(a => record.App.BundleId?.Equals(a, StringComparison.OrdinalIgnoreCase) == true) == true)
                 {
                     return (result.LatestVersion, result.Description);
                 }
 
-                if (artifact.Target is { Length: > 0 } && artifact.Target.Equals(appPath, StringComparison.OrdinalIgnoreCase))
+                if (artifact.Target is { Length: > 0 } &&
+                    artifact.Target.Equals(record.App.Path, StringComparison.OrdinalIgnoreCase) ||
+                    record.App.BundleId?.Equals(artifact.Target, StringComparison.OrdinalIgnoreCase) == true)
                 {
                     return (result.LatestVersion, result.Description);
                 }
@@ -930,14 +941,26 @@ public sealed partial class MacApplicationsScanner(
                         {
                             if (value.ValueKind == JsonValueKind.Array)
                             {
-                                if (value.EnumerateArray().Any(p => p.GetString()?.Equals(appPath, StringComparison.OrdinalIgnoreCase) == true))
+                                if (value.EnumerateArray().Any(p =>
+                                    {
+                                        var str = p.GetString();
+                                        if (str is null)
+                                        {
+                                            return false;
+                                        }
+
+                                        return str.Equals(record.App.Path, StringComparison.OrdinalIgnoreCase) ||
+                                               record.App.BundleId?.Equals(str, StringComparison.OrdinalIgnoreCase) == true;
+                                    }))
                                 {
                                     return (result.LatestVersion, result.Description);
                                 }
                             }
                             else if (value.ValueKind == JsonValueKind.String)
                             {
-                                if (value.GetString()?.Equals(appPath, StringComparison.OrdinalIgnoreCase) == true)
+                                var str = value.GetString();
+                                if (str?.Equals(record.App.Path, StringComparison.OrdinalIgnoreCase) == true ||
+                                    record.App.BundleId?.Equals(str, StringComparison.OrdinalIgnoreCase) == true)
                                 {
                                     return (result.LatestVersion, result.Description);
                                 }
