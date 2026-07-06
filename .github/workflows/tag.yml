@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Wait for CI workflow
-        uses: lewagon/wait-on-check-action@v1.7.0
+        uses: lewagon/wait-on-check-action@v1.8.1
         with:
           ref: ${{ github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -24,7 +24,7 @@ jobs:
           allowed-conclusions: success
 
       - name: Wait for AOT Publish
-        uses: lewagon/wait-on-check-action@v1.7.0
+        uses: lewagon/wait-on-check-action@v1.8.1
         with:
           ref: ${{ github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -33,7 +33,7 @@ jobs:
           allowed-conclusions: success
 
       - name: Wait for License Compliance
-        uses: lewagon/wait-on-check-action@v1.7.0
+        uses: lewagon/wait-on-check-action@v1.8.1
         with:
           ref: ${{ github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -42,7 +42,7 @@ jobs:
           allowed-conclusions: success
 
       - name: Wait for Security (CodeQL)
-        uses: lewagon/wait-on-check-action@v1.7.0
+        uses: lewagon/wait-on-check-action@v1.8.1
         with:
           ref: ${{ github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
