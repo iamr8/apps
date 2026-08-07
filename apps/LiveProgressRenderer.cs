@@ -176,6 +176,13 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
     /// </summary>
     public void RenderTable(IReadOnlyList<AppRecord> apps)
     {
+        // On a real terminal, wipe the transient progress/status lines so results start on a clean screen.
+        // Skipped when output is redirected (no in-place progress was drawn, and clearing would throw).
+        if (AnsiStyle.IsAnsi)
+        {
+            RenderClear();
+        }
+
         PrintTableFmt(apps);
     }
 
@@ -432,6 +439,7 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
         int pinned,
         int vulnerabilities,
         int errors,
+        int @unchecked,
         TimeSpan elapsed)
     {
         Console.WriteLine();
@@ -468,6 +476,11 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
         if (errors > 0)
         {
             parts.Add(AnsiStyle.Red(AnsiStyle.Bold(errors.ToString()) + " error" + (errors == 1 ? "" : "s")));
+        }
+
+        if (@unchecked > 0)
+        {
+            parts.Add(AnsiStyle.DarkGray(AnsiStyle.Bold(@unchecked.ToString()) + " unchecked"));
         }
 
         var timeStr = elapsed.TotalSeconds < 60
@@ -509,7 +522,11 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
             weight: 2f),
         new TableColumn<AppRecord>(
             "Kind",
-            static (app, w) => app.App.Kind.ToCliString().PadRight(w),
+            static (app, w) =>
+            {
+                var s = app.App.Kind.ToCliString().PadRight(w);
+                return app.CheckFailed ? AnsiStyle.DarkGray(s) : s;
+            },
             fixedWidth: 9),
         new TableColumn<AppRecord>(
             "Source",
@@ -553,6 +570,12 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
             var namePart = truncated[..namePartLen];
             var pad = new string(' ', Math.Max(0, w - combined.Length));
             return namePart + AnsiStyle.Cyan(pinnedSuffix) + pad;
+        }
+
+        if (record.CheckFailed)
+        {
+            var marked = AnsiStyle.Truncate("? " + displayName.Trim(), w).PadRight(w);
+            return AnsiStyle.DarkGray(marked);
         }
 
         var cellText = AnsiStyle.Truncate(displayName.Trim(), w).PadRight(w);
@@ -714,6 +737,11 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
         var full = qualifier is null ? label : $"{label} ({qualifier})";
         var truncated = AnsiStyle.Truncate(full.Trim(), sourceW).PadRight(sourceW);
 
+        if (record.CheckFailed)
+        {
+            return AnsiStyle.DarkGray(truncated);
+        }
+
         if (qualifier is null || !AnsiStyle.IsAnsi)
         {
             return truncated;
@@ -804,6 +832,11 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
     private static string BuildVersionCell(AppRecord record, int versionW, bool outdated)
     {
         var installed = (record.App.InstalledVersion ?? Dash).Trim().Split(',')[0];
+
+        if (record.CheckFailed)
+        {
+            return AnsiStyle.DarkGray(AnsiStyle.Truncate(installed, versionW).PadRight(versionW));
+        }
 
         if (!outdated)
         {

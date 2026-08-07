@@ -19,6 +19,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
     : IScanner
 {
     private string[] _executablePaths = [];
+    private Dictionary<string, string>? _builds;
 
     public string Name => "JetBrains";
 
@@ -103,6 +104,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
                     continue;
                 }
 
+                app.OwnerId = Path.GetFileName(productDir);
                 yield return app;
             }
         }
@@ -115,9 +117,123 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
             yield break;
         }
 
-        await foreach (var item in apps.WhenAll<AppRecord, (AppRecord Record, bool Error)>(CheckPluginVersionAsync, cancellationToken: cancellationToken))
+        var builds = _builds ??= JetBrainsBuildResolver.ResolveBuilds();
+
+        // Group plugins by their owning IDE's build so each build is queried once, constrained to
+        // versions actually compatible with the installed IDE. Plugins whose build we can't resolve
+        // fall back to an unconstrained per-plugin lookup.
+        var byBuild = new Dictionary<string, List<AppRecord>>(StringComparer.OrdinalIgnoreCase);
+        var noBuild = new List<AppRecord>();
+
+        foreach (var record in apps)
         {
-            yield return item;
+            if (record.App.OwnerId is { } dataDir && builds.TryGetValue(dataDir, out var build))
+            {
+                if (!byBuild.TryGetValue(build, out var list))
+                {
+                    list = [];
+                    byBuild[build] = list;
+                }
+
+                list.Add(record);
+            }
+            else
+            {
+                noBuild.Add(record);
+            }
+        }
+
+        foreach (var (build, records) in byBuild)
+        {
+            await foreach (var item in CheckCompatibleAsync(build, records, cancellationToken))
+            {
+                yield return item;
+            }
+        }
+
+        if (noBuild.Count > 0)
+        {
+            await foreach (var item in noBuild.WhenAll<AppRecord, (AppRecord Record, bool Error)>(CheckPluginVersionAsync, cancellationToken: cancellationToken))
+            {
+                yield return item;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Queries the marketplace <c>compatibleUpdates</c> endpoint once for a whole IDE build,
+    /// setting each plugin's latest version to the newest one compatible with that build.
+    /// Plugins with no compatible newer version are left untouched (reported as up to date).
+    /// </summary>
+    private async IAsyncEnumerable<(AppRecord App, bool Error)> CheckCompatibleAsync(
+        string build,
+        List<AppRecord> records,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var xmlIds = records
+            .Select(r => r.App.UpdateInfo)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        Dictionary<string, string>? latestByXmlId = null;
+        var failed = false;
+
+        if (xmlIds.Length > 0)
+        {
+            try
+            {
+                using var client = httpClientFactory.CreateClient("jetbrains");
+                var request = new JetBrainsCompatibleUpdateRequest { Build = build, PluginXmlIds = xmlIds! };
+                using var content = JsonContent.Create(request, JetBrainsJsonContext.Default.JetBrainsCompatibleUpdateRequest);
+                using var response = await client.PostAsync("/api/search/compatibleUpdates", content, cancellationToken).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+
+                var updates = await response.Content
+                    .ReadFromJsonAsync(JetBrainsJsonContext.Default.JetBrainsCompatibleUpdateArray, cancellationToken)
+                    .ConfigureAwait(false);
+
+                latestByXmlId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (updates is not null)
+                {
+                    foreach (var update in updates)
+                    {
+                        if (update.PluginXmlId is { Length: > 0 } xmlId && update.Version is { Length: > 0 } version)
+                        {
+                            latestByXmlId[xmlId] = version;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "JetBrains compatibleUpdates check failed for build {Build}", build);
+                failed = true;
+            }
+        }
+
+        foreach (var record in records)
+        {
+            if (failed)
+            {
+                yield return (record, true);
+                continue;
+            }
+
+            if (record.App.UpdateInfo is { } xmlId
+                && latestByXmlId is not null
+                && latestByXmlId.TryGetValue(xmlId, out var version))
+            {
+                record.App.LatestVersion = version;
+            }
+            else
+            {
+                // No build-compatible version listed on the marketplace (unlisted/internal plugin) —
+                // we can't confirm its update status, so mark it unchecked rather than implying it's current.
+                record.CheckFailed = true;
+            }
+
+            yield return (record, false);
         }
     }
 
@@ -186,7 +302,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
     private async Task<string?> ResolveNumericIdAsync(HttpClient client, string xmlId, CancellationToken cancellationToken)
     {
         using var response = await client
-            .GetAsync($"/api/plugins?xmlId={Uri.EscapeDataString(xmlId)}&size=1", cancellationToken)
+            .GetAsync($"/api/plugins?xmlId={Uri.EscapeDataString(xmlId)}&family=intellij&size=1", cancellationToken)
             .ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
@@ -195,10 +311,10 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
         }
 
         var searchResult = await response.Content
-            .ReadFromJsonAsync(JetBrainsJsonContext.Default.JetBrainsPluginInfoArray, cancellationToken)
+            .ReadFromJsonAsync(JetBrainsJsonContext.Default.JetBrainsPluginInfo, cancellationToken)
             .ConfigureAwait(false);
 
-        var id = searchResult?.FirstOrDefault()?.Id;
+        var id = searchResult?.Id;
         return id.HasValue ? id.Value.ToString() : null;
     }
 
