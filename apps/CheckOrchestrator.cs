@@ -64,6 +64,7 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
                 errors++;
             }
 
+            app.CheckFailed = app.CheckFailed || error;
             checkedApps.Add(app);
             renderer.RenderCheckActive(total);
         }

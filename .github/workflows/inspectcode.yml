@@ -36,9 +36,11 @@ jobs:
 
       # jb inspectcode restores and builds the solution itself, then reports. It returns 0 even when it
       # finds issues, so the job stays green; findings surface in code scanning. --severity=WARNING drops
-      # suggestion/hint noise.
+      # suggestion/hint noise. The test project is excluded: ReSharper does not understand TUnit's
+      # source-generated Test/Assert API, so it emits spurious "cannot resolve symbol" errors for every
+      # test file — noise that would otherwise fail the code-scanning check on any changed test line.
       - name: Run InspectCode
-        run: jb inspectcode apps.slnx --output=resharper.sarif --format=Sarif --severity=WARNING
+        run: jb inspectcode apps.slnx --output=resharper.sarif --format=Sarif --severity=WARNING --exclude="apps.Tests/**/*"
 
       - name: Upload results to code scanning
         uses: github/codeql-action/upload-sarif@v4

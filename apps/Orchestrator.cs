@@ -93,6 +93,7 @@ public sealed class Orchestrator(
         var totalDiscovered = resolved.Length;
         var totalPinned = resolved.Count(a => a.IsPinned);
         var totalVulnerable = resolved.Count(a => a.Vulnerabilities is { Count: > 0 });
+        var totalUnchecked = Math.Max(0, resolved.Count(a => a.CheckFailed) - errors);
 
         LiveProgressRenderer.RenderSummary(
             discovered: totalDiscovered,
@@ -101,6 +102,7 @@ public sealed class Orchestrator(
             pinned: totalPinned,
             vulnerabilities: totalVulnerable,
             errors: errors,
+            @unchecked: totalUnchecked,
             elapsed: pipelineStopwatch.Elapsed);
 
         return errors > 0 ? 1 : 0;
