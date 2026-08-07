@@ -230,20 +230,25 @@ The `.csproj` reads from it at build time — there is no need to edit version n
 VERSION          ← contains e.g. "1.2.0" (no "v" prefix, no trailing newline beyond one LF)
 ```
 
-### How to Bump the Version
+### Branch model
+
+- **`develop`** — integration branch. All PRs merge here. Every push runs CI, security, license, and
+  InspectCode checks (`.github/workflows/*.yml` triggered on `develop`). No artifacts are published.
+- **`main`** — release branch. A release happens by merging `develop` into `main` as a whole.
+
+### How to Bump the Version and Release
 
 1. You'll always be told about the next version number. If not, ask the user or maintainer what the new version should
    be.
-2. Commit existing changes first independently of the version bump. The version bump must be a separate commit on top of
-   a clean working tree.
-3. Edit the `VERSION` file with the new version number.
-4. Commit: `git commit -am "chore: bump version to X.Y.Z"`
-5. Push: `git push origin main`
+2. On `develop`, edit the `VERSION` file with the new version number and commit it (a plain commit — no
+   special message or dedicated-commit rule is required any more).
+3. When ready to release, merge `develop` into `main`.
+4. `release.yml` (triggered on push to `main`) reads the `VERSION` file and compares it against the
+   highest already-published GitHub release. If `VERSION` is strictly newer, it builds the AOT binaries
+   (`osx-arm64`, `osx-x64`), creates the `vX.Y.Z` tag as the release anchor, and publishes the GitHub
+   Release. If `VERSION` is lower than or equal to the highest release, **the run fails** — so bump
+   `VERSION` as part of the `develop` -> `main` release PR.
 
-> **⚠️ CRITICAL:** The VERSION file change must be in its own **single, dedicated commit** with
-> exactly the message `chore: bump version to X.Y.Z`. Never combine it with other changes.
-> This is required for the CI tagging pipeline to work correctly.
-
-The CI pipeline (`.github/workflows/tag.yml`) detects the VERSION change, creates and pushes
-`vX.Y.Z` tag automatically, which then triggers the release workflow
-(`.github/workflows/release.yml`) to build AOT binaries and publish a GitHub Release.
+The version is **not** driven by git tags: pushing a tag no longer starts a release, and there is no
+`tag.yml`. The `VERSION` file on `main` is the single source of truth. The tag is created by the release
+job purely as the anchor GitHub Releases require.
