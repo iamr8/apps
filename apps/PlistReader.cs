@@ -237,7 +237,7 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
     {
         // Native Mac apps — the overwhelming majority — keep the receipt at the fixed
         // Contents/_MASReceipt/receipt path; check it directly to avoid walking the whole bundle.
-        if (File.Exists(Path.Combine(appBundlePath, "Contents", "_MASReceipt", "receipt")))
+        if (File.Exists(Path.Join(appBundlePath, "Contents", "_MASReceipt", "receipt")))
         {
             return true;
         }
