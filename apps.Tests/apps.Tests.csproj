@@ -12,11 +12,11 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="TUnit" Version="1.50.0"/>
+        <PackageReference Include="TUnit" Version="1.63.0" />
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="../apps/apps.csproj"/>
+        <ProjectReference Include="../apps/apps.csproj" />
     </ItemGroup>
 
 </Project>
