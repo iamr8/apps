@@ -84,7 +84,8 @@ public sealed partial class MacApplicationsScanner(
 
     public async IAsyncEnumerable<(AppRecord App, bool Error)> CheckAsync(AppRecord[] apps, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var resolvedApps = new List<AppRecord>();
+        var resolvedApps = new HashSet<AppRecord>();
+        var resolvedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var erroredApps = new HashSet<AppRecord>();
         await foreach (var (app, resolved, error) in apps.WhenAll<AppRecord, (AppRecord App, bool Resolved, bool Error)>(onPublication: CheckAppAsync, cancellationToken: cancellationToken))
         {
@@ -99,10 +100,11 @@ public sealed partial class MacApplicationsScanner(
             }
 
             resolvedApps.Add(app);
+            resolvedNames.Add(app.App.Name);
             yield return (app, error);
         }
 
-        var unresolvedApps = apps.Where(a => !resolvedApps.Any(r => r.App.Name.Equals(a.App.Name, StringComparison.OrdinalIgnoreCase))).ToList();
+        var unresolvedApps = apps.Where(a => !resolvedNames.Contains(a.App.Name)).ToList();
         await foreach (var (app, resolved, error) in unresolvedApps.WhenAll<AppRecord, (AppRecord App, bool Resolved, bool Error)>(onPublication: CheckHomebrewAsync, cancellationToken: cancellationToken))
         {
             if (error)
@@ -120,8 +122,8 @@ public sealed partial class MacApplicationsScanner(
             yield return (app, error);
         }
 
-        unresolvedApps = apps.Except(resolvedApps).ToList();
-        foreach (var record in unresolvedApps)
+        var stillUnresolved = apps.Where(a => !resolvedApps.Contains(a)).ToList();
+        foreach (var record in stillUnresolved)
         {
             var errored = erroredApps.Contains(record);
             logger.LogDebug("Failed to resolve update information for {AppName}, skipping (errored: {Errored})", record.App.Name, errored);
@@ -458,10 +460,16 @@ public sealed partial class MacApplicationsScanner(
     }
 
     /// <summary>
-    /// Discovers pending macOS software updates via <c>softwareupdate --list --all</c>.
+    /// Discovers pending macOS software updates via <c>softwareupdate --list --no-scan</c>.
     /// Each item is emitted with <see cref="DiscoveredApp.LatestVersion"/> pre-filled so that
     /// <c>CheckAppAsync</c> treats it as already resolved (no further remote check needed).
     /// </summary>
+    /// <remarks>
+    /// <c>--no-scan</c> reads the result of macOS's own periodic background scan instead of
+    /// contacting Apple's servers synchronously. A live <c>--list</c> can block 10–50s on Apple's
+    /// latency and gate the entire scan phase; the cached result is effectively instant and stays
+    /// fresh because macOS scans on its own schedule.
+    /// </remarks>
     private async IAsyncEnumerable<DiscoveredApp> EnumerateSoftwareUpdates([EnumeratorCancellation] CancellationToken cancellationToken)
     {
         const string swuPath = "/usr/sbin/softwareupdate";
@@ -470,7 +478,7 @@ public sealed partial class MacApplicationsScanner(
             yield break;
         }
 
-        var result = await runner.RunAsync(swuPath, "--list --all", cancellationToken);
+        var result = await runner.RunAsync(swuPath, "--list --no-scan", cancellationToken);
         var output = result.StandardOutput + result.StandardError;
 
         foreach (var (label, version) in ParseSoftwareUpdates(output))

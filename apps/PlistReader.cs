@@ -139,8 +139,6 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
         doc.LoadXml(xml);
 
         // Apple XML plist schema: <plist><dict><key>…</key><string>…</string>…</dict></plist>
-        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(xml));
-
         var dict = doc.SelectSingleNode("/plist") ?? throw new FormatException("No top-level <dict> in plist");
         var plist = Plist.Parse(dict);
 
@@ -237,8 +235,15 @@ public sealed class PlistReader(ILogger<PlistReader> logger)
 
     private static bool HasAppStoreReceipt(string appBundlePath)
     {
-        // _MASReceipt sits in Contents/ for native Mac apps and elsewhere
-        // for iOS-on-Mac bundles, so don't assume a fixed path.
+        // Native Mac apps — the overwhelming majority — keep the receipt at the fixed
+        // Contents/_MASReceipt/receipt path; check it directly to avoid walking the whole bundle.
+        if (File.Exists(Path.Join(appBundlePath, "Contents", "_MASReceipt", "receipt")))
+        {
+            return true;
+        }
+
+        // iOS-on-Mac bundles nest the receipt under Wrapper/*.app; fall back to a recursive
+        // walk only for those (rare) layouts.
         return Directory.EnumerateDirectories(appBundlePath, "_MASReceipt", SearchOption.AllDirectories)
             .Any(dir => File.Exists(Path.Combine(dir, "receipt")));
     }

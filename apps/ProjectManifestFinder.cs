@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 
 using Microsoft.Extensions.Logging;
@@ -11,6 +12,11 @@ namespace apps;
 /// </summary>
 public sealed class ProjectManifestFinder(ILogger<ProjectManifestFinder> logger)
 {
+    // Parsed .gitignore directory-name patterns, keyed by the .gitignore file path.
+    // A directory's .gitignore is otherwise read once per subdirectory; cache it so it is read once.
+    // A null value marks "no .gitignore here" so the miss is not re-probed.
+    private readonly ConcurrentDictionary<string, HashSet<string>?> _gitignoreCache = new();
+
     // Well-known directories to always skip regardless of .gitignore
     private static readonly HashSet<string> AlwaysSkip = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -100,7 +106,7 @@ public sealed class ProjectManifestFinder(ILogger<ProjectManifestFinder> logger)
         }
     }
 
-    private static async Task<bool> IsGitIgnoredAsync(string dirPath, CancellationToken cancellationToken)
+    private async Task<bool> IsGitIgnoredAsync(string dirPath, CancellationToken cancellationToken)
     {
         var dirName = Path.GetFileName(dirPath);
         var parentDir = Path.GetDirectoryName(dirPath);
@@ -110,35 +116,44 @@ public sealed class ProjectManifestFinder(ILogger<ProjectManifestFinder> logger)
         }
 
         var gitignorePath = Path.Combine(parentDir, ".gitignore");
-        if (!File.Exists(gitignorePath))
+        var patterns = await GetGitignorePatternsAsync(gitignorePath, cancellationToken);
+        return patterns is not null && (patterns.Contains(dirName) || patterns.Contains($"/{dirName}"));
+    }
+
+    private async Task<HashSet<string>?> GetGitignorePatternsAsync(string gitignorePath, CancellationToken cancellationToken)
+    {
+        if (_gitignoreCache.TryGetValue(gitignorePath, out var cached))
         {
-            return false;
+            return cached;
         }
 
-        try
+        HashSet<string>? patterns = null;
+        if (File.Exists(gitignorePath))
         {
-            var lines = await File.ReadAllLinesAsync(gitignorePath, cancellationToken);
-            foreach (var rawLine in lines)
+            try
             {
-                var line = rawLine.Trim();
-                if (string.IsNullOrEmpty(line) || line.StartsWith('#'))
+                var lines = await File.ReadAllLinesAsync(gitignorePath, cancellationToken);
+                patterns = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var rawLine in lines)
                 {
-                    continue;
-                }
+                    var line = rawLine.Trim();
+                    if (string.IsNullOrEmpty(line) || line.StartsWith('#'))
+                    {
+                        continue;
+                    }
 
-                // Simple exact-match and trailing-slash patterns
-                var pattern = line.TrimEnd('/');
-                if (pattern == dirName || pattern == $"/{dirName}")
-                {
-                    return true;
+                    // Simple exact-match and trailing-slash patterns
+                    patterns.Add(line.TrimEnd('/'));
                 }
             }
-        }
-        catch
-        {
-            // Ignore unreadable .gitignore
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Ignore unreadable .gitignore
+                patterns = null;
+            }
         }
 
-        return false;
+        _gitignoreCache[gitignorePath] = patterns;
+        return patterns;
     }
 }

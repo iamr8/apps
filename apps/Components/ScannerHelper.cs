@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace apps.Components;
 
 /// <summary>
@@ -6,6 +8,10 @@ namespace apps.Components;
 internal static class ScannerHelper
 {
     private static readonly Dictionary<string, string[]> WindowsFallbacks = [];
+
+    // Executable locations are stable for the life of the process; memoize so repeated
+    // IsAvailable()/lookup calls don't re-walk PATH and probe the filesystem each time.
+    private static readonly ConcurrentDictionary<string, string?> ExecutableCache = new();
 
     static ScannerHelper()
     {
@@ -37,6 +43,11 @@ internal static class ScannerHelper
     /// /usr/bin, /bin). Returns the full path on success, or <c>null</c> if not found.
     /// </summary>
     public static string? FindExecutable(string name)
+    {
+        return ExecutableCache.GetOrAdd(name, FindExecutableCore);
+    }
+
+    private static string? FindExecutableCore(string name)
     {
         // Walk the actual PATH so user-overridden versions are preferred.
         var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";

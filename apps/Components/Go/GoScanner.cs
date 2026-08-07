@@ -209,18 +209,20 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
                 yield break;
             }
 
-            foreach (var binaryPath in binaries)
+            // `go version -m` is one subprocess per binary; run them concurrently (bounded by
+            // ProcessRunner's global cap) instead of serially so a directory of N tools does not
+            // cost N × spawn latency end to end.
+            var probes = binaries
+                .Where(p => !Path.GetFileName(p).StartsWith('.'))
+                .Select(binaryPath => (binaryPath, task: runner.RunAsync(_executablePath!, $"version -m \"{binaryPath}\"", cancellationToken)))
+                .ToArray();
+
+            foreach (var (binaryPath, task) in probes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Skip non-executable files and hidden files
                 var name = Path.GetFileName(binaryPath);
-                if (name.StartsWith('.'))
-                {
-                    continue;
-                }
-
-                var result = await runner.RunAsync(_executablePath!, $"version -m \"{binaryPath}\"", cancellationToken);
+                var result = await task;
 
                 if (!result.Success
                     || result.StandardOutput.Contains("not an executable", StringComparison.OrdinalIgnoreCase)
