@@ -1,51 +1,112 @@
-name: Build and Release
+name: Release
 
+# Releases the apps CLI.
+#
+# Triggered when develop is merged into main (main is the release branch), or manually via
+# workflow_dispatch. The `check` job reads the VERSION file and compares it against the highest
+# version already published as a GitHub release: only if VERSION is strictly newer does the pipeline
+# build the AOT binaries, tag the commit, and publish the release. If VERSION is lower than or equal
+# to the highest release, the run FAILS — the convention is to include the VERSION bump in the
+# develop -> main release PR, so an un-bumped merge to main is a mistake worth surfacing loudly.
+#
+# There is no tag trigger: the tag is created by the release job as the release anchor, it is not what
+# starts the pipeline. The single source of truth for the version is the VERSION file.
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ main ]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to release (e.g. v1.0.4)'
-        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
-  contents: write
-
-env:
-  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  contents: read
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        rid: [osx-arm64, osx-x64]
+  check:
+    name: Check version is newer
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
 
+      - name: Compare VERSION against the highest published release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          if [ -z "$VERSION" ]; then echo "::error::VERSION file is empty"; exit 1; fi
+
+          LATEST=$(gh release list --limit 100 --json tagName --jq '.[].tagName' \
+            | sed 's/^v//' | sort -V | tail -1 || true)
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "VERSION file: $VERSION; highest release: ${LATEST:-<none>}"
+
+          if [ -z "$LATEST" ]; then
+            echo "First release: $VERSION"
+          elif [ "$VERSION" = "$LATEST" ]; then
+            echo "::error title=Release failed::Version $VERSION is already released. Bump VERSION to release."
+            exit 1
+          else
+            TOP=$(printf '%s\n%s\n' "$VERSION" "$LATEST" | sort -V | tail -1)
+            if [ "$TOP" != "$VERSION" ]; then
+              echo "::error title=Release failed::Version $VERSION is not newer than the highest release ($LATEST)."
+              exit 1
+            fi
+            echo "Releasing $VERSION (previous highest: $LATEST)"
+          fi
+
+  test:
+    name: Build & test
+    needs: check
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/checkout@v7
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
-      - name: Determine version
-        id: version
-        run: |
-          TAG="${{ env.RELEASE_TAG }}"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Restore dependencies
+        run: dotnet restore
 
+      - name: Build
+        run: dotnet build --no-restore --configuration Release /warnaserror
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+  build:
+    name: Package
+    needs: test
+    runs-on: macos-15
+    strategy:
+      matrix:
+        rid: [ osx-arm64, osx-x64 ]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # AOT publish with -r is inherently self-contained, and the csproj reads the version from the
+      # VERSION file at build time, so neither --self-contained nor -p:Version is needed. Tests and
+      # warnings-as-errors already ran once in the `test` job, so this job only produces the binary.
       - name: Publish binary
         run: |
           dotnet publish apps/apps.csproj \
             -c Release \
             -r ${{ matrix.rid }} \
-            -p:Version=${{ steps.version.outputs.version }} \
             -o dist
 
       - name: Archive binary
@@ -58,55 +119,42 @@ jobs:
         with:
           name: apps-${{ matrix.rid }}
           path: apps-${{ matrix.rid }}.tar.gz
+          if-no-files-found: error
 
-  release:
-    needs: build
+  github-release:
+    name: Publish GitHub release
+    needs: [ check, build ]
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write  # create the git tag and GitHub release
+    environment:
+      name: github-release
+      url: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Fetch all tags
-        run: git fetch --tags --force
-
-      - name: Determine previous tag
-        id: prev
-        run: |
-          TAG="${{ env.RELEASE_TAG }}"
-          PREV=$(git tag --sort=-v:refname | grep -E '^v' | grep -v "^${TAG}$" | head -1)
-          if [ -z "$PREV" ]; then
-            PREV=$(git rev-list --max-parents=0 HEAD | head -1)
-          fi
-          echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
-
-      - name: Generate release body
-        run: |
-          TAG="${{ env.RELEASE_TAG }}"
-          PREV="${{ steps.prev.outputs.tag }}"
-          REPO="${{ github.server_url }}/${{ github.repository }}"
-          COMPARE="${REPO}/compare/${PREV}...${TAG}"
-
-          echo "## What's Changed" > release-notes.md
-          echo "" >> release-notes.md
-          echo "**Full diff:** [${PREV}...${TAG}](${COMPARE})" >> release-notes.md
-          echo "" >> release-notes.md
-          git log "${PREV}..${TAG}" --pretty=format:"- %s ([%h](${REPO}/commit/%H))" --reverse | grep -v "chore: bump version" >> release-notes.md || true
-          echo "" >> release-notes.md
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      - name: List artifacts
-        run: find artifacts -type f
+      - name: Tag and create GitHub release
+        env:
+          TAG: v${{ needs.check.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t ASSETS < <(find artifacts -name '*.tar.gz' | sort)
+          echo "Release assets: ${ASSETS[*]}"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          body_path: release-notes.md
-          files: artifacts/**/*.tar.gz
+          # Idempotent: tolerate an existing tag/release so a re-run after a later-stage failure recovers.
+          git tag "$TAG" || echo "tag $TAG already exists locally"
+          git push origin "$TAG" || echo "tag $TAG already on origin"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" --title "v$VERSION" --generate-notes "${ASSETS[@]}"
+          fi

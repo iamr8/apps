@@ -1,3 +1,5 @@
+using System.Threading.Channels;
+
 using apps.Components;
 
 using Microsoft.Extensions.Logging;
@@ -47,20 +49,23 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
 
         int total = 0, errors = 0;
         var checkedApps = new List<AppRecord>();
-        foreach (var (scanner, scannerApps) in appGroups)
+
+        // Fan every scanner's CheckAsync out concurrently and merge the results through a single
+        // bounded channel. A slow scanner (e.g. per-cask Homebrew lookups) no longer blocks the
+        // others, and all mutation of the counters/list happens on the single reader below.
+        await foreach (var (app, error) in appGroups.WhenAll<(IScanner Scanner, AppRecord[] Apps), (AppRecord App, bool Error)>(
+                           onPublication: RunCheckGroupAsync,
+                           cancellationToken: cancellationToken))
         {
-            await foreach (var (app, error) in scanner.CheckAsync(scannerApps, cancellationToken))
+            total++;
+
+            if (error)
             {
-                total++;
-
-                if (error)
-                {
-                    errors++;
-                }
-
-                checkedApps.Add(app);
-                renderer.RenderCheckActive(total);
+                errors++;
             }
+
+            checkedApps.Add(app);
+            renderer.RenderCheckActive(total);
         }
 
         await timerCts.CancelAsync().ConfigureAwait(false);
@@ -79,5 +84,16 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
             total, updates, errors);
 
         return (total, updates, errors);
+    }
+
+    private static async Task RunCheckGroupAsync(
+        (IScanner Scanner, AppRecord[] Apps) group,
+        ChannelWriter<(AppRecord App, bool Error)> writer,
+        CancellationToken cancellationToken)
+    {
+        await foreach (var result in group.Scanner.CheckAsync(group.Apps, cancellationToken).ConfigureAwait(false))
+        {
+            await writer.WriteAsync(result, cancellationToken).ConfigureAwait(false);
+        }
     }
 }

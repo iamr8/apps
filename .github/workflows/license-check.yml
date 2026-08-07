@@ -2,9 +2,13 @@ name: License Compliance
 
 on:
   push:
-    branches: [ main ]
+    branches: [ develop, main ]
   pull_request:
-    branches: [ main ]
+    branches: [ develop, main ]
+
+concurrency:
+  group: license-check-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,10 +20,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -30,11 +34,10 @@ jobs:
 
       - name: Check licenses
         run: |
-          dotnet-project-licenses -i apps/apps.csproj --allowed-license-types allowed-licenses.json --output
+          dotnet-project-licenses -i apps/apps.csproj --allowed-license-types .github/allowed-licenses.json --output
         env:
           DOTNET_ROLL_FORWARD: LatestMajor
 
       - name: Verify no banned licenses
         run: |
           echo "License check passed — all dependencies use permitted licenses."
-

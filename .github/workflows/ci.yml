@@ -1,10 +1,17 @@
 name: CI
 
+# Runs on every push to develop (the integration branch all PRs land on) and on PRs targeting either
+# develop or main. main receives releases via a develop -> main merge, so the release pipeline
+# (release.yml) re-runs build & test there; this workflow keeps the day-to-day feedback loop on develop.
 on:
   push:
-    branches: [ main ]
+    branches: [ develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ develop, main ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -38,10 +45,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -50,4 +57,3 @@ jobs:
 
       - name: Verify binary runs
         run: ./apps/bin/Release/net10.0/osx-arm64/publish/apps --help
-
