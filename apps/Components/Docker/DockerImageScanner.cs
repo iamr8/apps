@@ -54,9 +54,9 @@ public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory
         var localImageIds = await GetLocallyBuiltImageIdsAsync(cancellationToken);
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var line in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        var lines = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var app in lines.Select(line => ParseLine(line, seen, localImageIds)))
         {
-            var app = ParseLine(line, seen, localImageIds);
             if (app is not null)
             {
                 yield return app;

@@ -30,7 +30,7 @@ internal static class JetBrainsBuildResolver
                 using var stream = File.OpenRead(file);
                 info = JsonSerializer.Deserialize(stream, JetBrainsJsonContext.Default.JetBrainsProductInfo);
             }
-            catch
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
             {
                 continue;
             }
@@ -52,11 +52,11 @@ internal static class JetBrainsBuildResolver
 
         if (OperatingSystem.IsMacOS())
         {
-            foreach (var appsRoot in new[] { "/Applications", Path.Combine(home, "Applications") })
+            foreach (var appsRoot in new[] { "/Applications", Path.Join(home, "Applications") })
             {
                 foreach (var bundle in SafeEnumerateDirectories(appsRoot, "*.app"))
                 {
-                    var candidate = Path.Combine(bundle, "Contents", "Resources", "product-info.json");
+                    var candidate = Path.Join(bundle, "Contents", "Resources", "product-info.json");
                     if (File.Exists(candidate))
                     {
                         yield return candidate;
@@ -64,7 +64,7 @@ internal static class JetBrainsBuildResolver
                 }
             }
 
-            var toolbox = Path.Combine(home, "Library", "Application Support", "JetBrains", "Toolbox", "apps");
+            var toolbox = Path.Join(home, "Library", "Application Support", "JetBrains", "Toolbox", "apps");
             foreach (var file in SafeEnumerateFiles(toolbox, "product-info.json"))
             {
                 yield return file;
@@ -77,9 +77,9 @@ internal static class JetBrainsBuildResolver
         {
             var roots = new[]
             {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "JetBrains"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "JetBrains"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "JetBrains", "Toolbox", "apps")
+                Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "JetBrains"),
+                Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "JetBrains"),
+                Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "JetBrains", "Toolbox", "apps")
             };
 
             foreach (var root in roots)
@@ -103,7 +103,7 @@ internal static class JetBrainsBuildResolver
         {
             return Directory.EnumerateDirectories(root, pattern, SearchOption.TopDirectoryOnly);
         }
-        catch
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
             return [];
         }
@@ -120,7 +120,7 @@ internal static class JetBrainsBuildResolver
         {
             return Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories);
         }
-        catch
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
             return [];
         }

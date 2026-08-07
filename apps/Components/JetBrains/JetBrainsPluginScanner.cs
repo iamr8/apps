@@ -196,12 +196,9 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
                 latestByXmlId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 if (updates is not null)
                 {
-                    foreach (var update in updates)
+                    foreach (var update in updates.Where(u => u is { PluginXmlId.Length: > 0, Version.Length: > 0 }))
                     {
-                        if (update.PluginXmlId is { Length: > 0 } xmlId && update.Version is { Length: > 0 } version)
-                        {
-                            latestByXmlId[xmlId] = version;
-                        }
+                        latestByXmlId[update.PluginXmlId!] = update.Version!;
                     }
                 }
             }
