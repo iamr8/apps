@@ -1,0 +1,53 @@
+name: CodeQL
+
+# CodeQL security + quality scanning for the C# CLI.
+#
+# To get suggested fixes as PRs/commits: enable Copilot Autofix for code scanning in
+#   Settings -> Code security and analysis -> "Code scanning" -> CodeQL -> Copilot Autofix.
+# The pull_request trigger below is what lets Autofix propose fixes on incoming changes.
+on:
+  push:
+    branches: [ develop, main ]
+  pull_request:
+    branches: [ develop, main ]
+  schedule:
+    - cron: '0 6 * * 1'  # weekly, Monday 06:00 UTC
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (C#)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          queries: security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
+
+      # Build only the shipped CLI, not the test project, so test-only findings stay out of code
+      # scanning (paths-ignore in the config does not exclude already-compiled C# sources).
+      - name: Build
+        run: dotnet build apps/apps.csproj -c Release
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:csharp"

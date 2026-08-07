@@ -1,0 +1,6 @@
+name: "CodeQL config"
+
+# The shipped CLI (apps/) is the security surface. The test project is not published, so its findings
+# (nullable-dereference in fakes, etc.) are noise — exclude it from analysis.
+paths-ignore:
+  - "apps.Tests/**"
