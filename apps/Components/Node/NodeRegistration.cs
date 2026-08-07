@@ -10,7 +10,7 @@ public static class NodeRegistration
     {
         services.AddCheckerClient("npm", "https://registry.npmjs.org", 32, c =>
         {
-            c.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.npm.install-v1+json");
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         });
 
         services.AddSingleton<IScanner, NodeScanner>();

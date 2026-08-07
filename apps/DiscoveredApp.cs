@@ -60,6 +60,12 @@ public sealed record DiscoveredApp
     public string? UpdateInfo { get; set; }
 
     /// <summary>
+    /// Scanner-specific grouping key. Used by the JetBrains scanner to carry the IDE
+    /// data-directory name so the checker can resolve the owning IDE's build number.
+    /// </summary>
+    public string? OwnerId { get; set; }
+
+    /// <summary>
     /// Short human-readable description shown as a dim subtitle in the table.
     /// For VS Code extensions: the marketplace display name.
     /// For Homebrew: the formula/cask description.

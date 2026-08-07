@@ -29,6 +29,14 @@ public sealed class AppRecord(DiscoveredApp app)
     /// </summary>
     public bool IsPinned { get; set; }
 
+    /// <summary>
+    /// When <c>true</c>, the update status could not be determined — a genuine check failure
+    /// (network/registry error) or an unresolvable package (unpublished local image, private
+    /// registry, no known update source). Such rows are rendered dimmed so they are not mistaken
+    /// for confirmed up-to-date packages.
+    /// </summary>
+    public bool CheckFailed { get; set; }
+
     public List<AppRecord>? SubApps => App.SubApps?.Select(c => From(new KeyValuePair<string, DiscoveredApp>(c.Name, c))).ToList() ?? null;
 
     public DiscoveredApp App { get; init; } = app;

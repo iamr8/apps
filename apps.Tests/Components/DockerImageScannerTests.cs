@@ -128,7 +128,7 @@ public sealed class DockerImageScannerTests
     }
 
     [Test]
-    public async Task CheckAsync_WhenRegistryReturns404_ReportsError()
+    public async Task CheckAsync_WhenRegistryReturns404_MarksUncheckedWithoutError()
     {
         var handler = new StubHttpMessageHandler()
             .WithStatus("/v2/repositories/library/ghost/tags/latest", HttpStatusCode.NotFound);
@@ -137,7 +137,9 @@ public sealed class DockerImageScannerTests
 
         var results = await Check(scanner, record);
 
-        await Assert.That(results[0].Error).IsTrue();
+        // A repo/tag absent from Docker Hub (e.g. a locally-built image) is unresolvable, not a failure.
+        await Assert.That(results[0].Error).IsFalse();
+        await Assert.That(record.CheckFailed).IsTrue();
         await Assert.That(record.App.LatestVersion).IsNull();
     }
 
@@ -152,6 +154,7 @@ public sealed class DockerImageScannerTests
 
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Error).IsFalse();
+        await Assert.That(record.CheckFailed).IsTrue();
         await Assert.That(handler.Requests).IsEmpty();
         await Assert.That(record.App.LatestVersion).IsNull();
     }

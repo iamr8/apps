@@ -150,7 +150,7 @@ public sealed class JetBrainsPluginScannerTests
     public async Task CheckAsync_XmlId_ResolvesNumericIdThenFetchesUpdates()
     {
         var handler = new StubHttpMessageHandler()
-            .WithJson("/api/plugins", """[ { "id": 1234 } ]""")
+            .WithJson("/api/plugins", """{ "id": 1234 }""")
             .WithJson("/api/plugins/1234/updates", """[ { "version": "3.0.0" } ]""");
         var scanner = CreateScanner(handler);
         var record = PluginRecord(scanner, name: "Example", xmlId: "com.example.plugin", installed: "1.0.0");
@@ -166,7 +166,7 @@ public sealed class JetBrainsPluginScannerTests
     public async Task CheckAsync_XmlId_NotFoundInSearch_LeavesLatestUnsetWithoutError()
     {
         var handler = new StubHttpMessageHandler()
-            .WithJson("/api/plugins", "[ ]");
+            .WithJson("/api/plugins", "{ }");
         var scanner = CreateScanner(handler);
         var record = PluginRecord(scanner, name: "Example", xmlId: "com.example.plugin", installed: "1.0.0");
 
