@@ -146,7 +146,7 @@ public sealed class ProjectManifestFinder(ILogger<ProjectManifestFinder> logger)
                     patterns.Add(line.TrimEnd('/'));
                 }
             }
-            catch
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 // Ignore unreadable .gitignore
                 patterns = null;
