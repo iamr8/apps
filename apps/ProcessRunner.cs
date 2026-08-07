@@ -5,15 +5,18 @@ using Microsoft.Extensions.Logging;
 namespace apps;
 
 /// <summary>
-/// Runs subprocesses with a global concurrency cap of 6 to avoid overloading the system.
+/// Runs subprocesses with a global concurrency cap (one per logical core, floor of 6) to avoid overloading the system.
 /// stdout and stderr are read concurrently with WaitForExitAsync to prevent deadlocks
 /// when a child fills its pipe buffer.
 /// Each subprocess is killed after <see cref="DefaultTimeout"/> if it has not exited.
 /// </summary>
 public sealed class ProcessRunner(ILogger<ProcessRunner> logger) : IProcessRunner
 {
-    // Global cap: never run more than 6 subprocesses simultaneously
-    private static readonly SemaphoreSlim Cap = new(6, 6);
+    // Global cap on concurrent subprocesses. Child work (brew, npm, go, …) is I/O-bound —
+    // mostly waiting on disk and network — so allow one per logical core (floor of 6) rather
+    // than a fixed 6, which under-utilises modern multi-core Macs.
+    private static readonly SemaphoreSlim Cap =
+        new(Math.Max(6, Environment.ProcessorCount), Math.Max(6, Environment.ProcessorCount));
 
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
 
