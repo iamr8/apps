@@ -81,7 +81,7 @@ public sealed class Orchestrator(
             .Where(a => options.ScopeKind is null || a.App.Kind == options.ScopeKind);
         if (!options.ShowAll)
         {
-            v = v.Where(a => a.UpdateAvailable);
+            v = v.Where(a => a.HasUpdate);
         }
 
         var visible = v
