@@ -44,18 +44,24 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         var results = new Dictionary<string, DiscoveredApp>(256);
         await foreach (var app in activeScanners.WhenAll<IScanner, DiscoveredApp>(RunScannerAsync, cancellationToken: cancellationToken))
         {
-            if (results.TryGetValue(app.Name, out var existing))
+            // De-duplicate by source, kind AND name. Two discoveries collapse only when the same
+            // scanner reports the same name and kind; a same-named app and extension (the "Claude"
+            // desktop app vs the "Claude" Chrome extension) or two same-kind extensions from
+            // different ecosystems (the "EditorConfig" JetBrains plugin vs the VS Code extension)
+            // are different things and must stay separate top-level entries.
+            var key = DedupKey(app.Source.Name, app.Kind, app.Name);
+            if (results.TryGetValue(key, out var existing))
             {
                 existing = existing with
                 {
                     Description = existing.Description ?? app.Description,
                     SubApps = (existing.SubApps ?? []).Append(app with { IsDuplicate = true, Description = null }).ToList()
                 };
-                results[app.Name] = existing;
+                results[key] = existing;
             }
             else
             {
-                results.Add(app.Name, app);
+                results.Add(key, app);
             }
         }
 
@@ -70,8 +76,11 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         {
         }
 
-        renderer.RenderScanComplete(results.Count);
-        logger.LogInformation("Scan complete: {Total} apps discovered", results.Count);
+        // Count sub-apps too (e.g. a Homebrew cask channel of a scanned bundle): they are
+        // discovered here and checked later, so both totals cover the same set.
+        var discoveredCount = results.Values.Sum(a => 1 + (a.SubApps?.Count ?? 0));
+        renderer.RenderScanComplete(discoveredCount);
+        logger.LogInformation("Scan complete: {Total} apps discovered", discoveredCount);
         return results;
     }
 
@@ -146,4 +155,10 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
 
         renderer.RenderScannerDone(scanner.Name);
     }
+
+    /// <summary>Composite de-duplication key: two discoveries collapse only when they share the
+    /// same source scanner, kind and name, so same-named items from different scanners (e.g. a
+    /// JetBrains plugin vs a VS Code extension) or of different kinds stay distinct top-level
+    /// entries.</summary>
+    private static string DedupKey(string source, AppKind kind, string name) => $"{source}|{kind}|{name}";
 }

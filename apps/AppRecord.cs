@@ -43,6 +43,16 @@ public sealed class AppRecord(DiscoveredApp app)
 
     public bool UpdateAvailable => VersionComparer.IsNewer(App.InstalledVersion, App.LatestVersion);
 
+    /// <summary>
+    /// <see langword="true"/> when this app or any of its sub-apps has a newer version available.
+    /// Used by the outdated-only view and the update count so a sub-app update (e.g. a Homebrew
+    /// cask channel) still surfaces even when the parent bundle is itself current.
+    /// </summary>
+    public bool HasUpdate =>
+        UpdateAvailable
+        || (App.SubApps is { Count: > 0 } subApps
+            && subApps.Any(s => VersionComparer.IsNewer(s.InstalledVersion, s.LatestVersion)));
+
     /// <summary>Creates an <see cref="AppRecord"/> from a <see cref="App"/>.</summary>
     public static AppRecord From(KeyValuePair<string, DiscoveredApp> kvp) => new(kvp.Value);
 }

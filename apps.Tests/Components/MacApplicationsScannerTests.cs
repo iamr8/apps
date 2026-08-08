@@ -336,10 +336,320 @@ public sealed class MacApplicationsScannerTests
         await Assert.That(record.App.LatestVersion).IsNull();
     }
 
-    private static MacApplicationsScanner CreateScanner(StubHttpMessageHandler handler) =>
+    [Test]
+    [Arguments(0.0, 6.0, false)]
+    [Arguments(5.0, 6.0, false)]
+    [Arguments(7.0, 6.0, true)]
+    public async Task IsCacheStale_ComparesAgeAgainstMaxAge(double ageHours, double maxAgeHours, bool expected)
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var written = now.AddHours(-ageHours);
+
+        await Assert.That(MacApplicationsScanner.IsCacheStale(written, now, TimeSpan.FromHours(maxAgeHours))).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task IsCacheStale_NeverWritten_IsStale()
+    {
+        await Assert.That(MacApplicationsScanner.IsCacheStale(null, DateTimeOffset.UtcNow, TimeSpan.FromHours(6))).IsTrue();
+    }
+
+    [Test]
+    public async Task GetNewestApiCacheWriteUtc_ReturnsLatestJwsWriteAcrossSubdirectories()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var older = Path.Combine(dir, "formula.jws.json");
+            var internalDir = Path.Combine(dir, "internal");
+            Directory.CreateDirectory(internalDir);
+            var newer = Path.Combine(internalDir, "packages.arm64.jws.json");
+            await File.WriteAllTextAsync(older, "{}");
+            await File.WriteAllTextAsync(newer, "{}");
+
+            var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(older, t0);
+            File.SetLastWriteTimeUtc(newer, t0.AddHours(3));
+
+            var newest = MacApplicationsScanner.GetNewestApiCacheWriteUtc(dir);
+
+            await Assert.That(newest).IsNotNull();
+            await Assert.That(newest!.Value.UtcDateTime).IsEqualTo(t0.AddHours(3));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task GetNewestApiCacheWriteUtc_MissingDirectory_ReturnsNull()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), "apps-missing-" + Guid.NewGuid().ToString("N"));
+
+        await Assert.That(MacApplicationsScanner.GetNewestApiCacheWriteUtc(missing)).IsNull();
+    }
+
+    [Test]
+    public async Task RefreshBrewApiCacheIfStaleAsync_StaleCache_RunsBrewUpdate()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var file = Path.Combine(dir, "packages.jws.json");
+            await File.WriteAllTextAsync(file, "{}");
+            var now = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+            File.SetLastWriteTimeUtc(file, now.UtcDateTime.AddDays(-1));
+
+            var runner = new FakeProcessRunner().WithSuccess("/opt/homebrew/bin/brew", "update --quiet", "Updated");
+            var scanner = CreateScanner(new StubHttpMessageHandler(), runner);
+
+            await scanner.RefreshBrewApiCacheIfStaleAsync("/opt/homebrew/bin/brew", dir, now, TimeSpan.FromHours(6), CancellationToken.None);
+
+            await Assert.That(runner.Invocations).Contains("/opt/homebrew/bin/brew update --quiet");
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task RefreshBrewApiCacheIfStaleAsync_FreshCache_SkipsBrewUpdate()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var file = Path.Combine(dir, "packages.jws.json");
+            await File.WriteAllTextAsync(file, "{}");
+            var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            File.SetLastWriteTimeUtc(file, now.UtcDateTime.AddMinutes(-5));
+
+            var runner = new FakeProcessRunner();
+            var scanner = CreateScanner(new StubHttpMessageHandler(), runner);
+
+            await scanner.RefreshBrewApiCacheIfStaleAsync("/opt/homebrew/bin/brew", dir, now, TimeSpan.FromHours(6), CancellationToken.None);
+
+            await Assert.That(runner.Invocations).IsEmpty();
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task ApplyCaskToScannedApp_SelfUpdatedSameBundle_SubAppUsesBundleVersion_UpToDate()
+    {
+        // OrbStack self-updated to 2.2.3; brew's receipt still says 2.2.2. The cask sub-app must
+        // report the bundle's real version (2.2.3), not the stale receipt, so it is not falsely outdated.
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "OrbStack", path: "/Applications/OrbStack.app", installed: "2.2.3");
+        var cask = OrbCask(installed: "2.2.2", latest: "2.2.3", target: "/Applications/OrbStack.app");
+
+        scanner.ApplyCaskToScannedApp(app, cask);
+
+        await Assert.That(app.SubApps!.Count).IsEqualTo(1);
+        var sub = app.SubApps[0];
+        await Assert.That(sub.InstalledVersion).IsEqualTo("2.2.3");
+        await Assert.That(sub.LatestVersion).IsEqualTo("2.2.3");
+        await Assert.That(sub.Attribute.HasFlag(AppAttribute.HomebrewCask)).IsTrue();
+        await Assert.That(new AppRecord(sub).UpdateAvailable).IsFalse();
+        await Assert.That(new AppRecord(app).HasUpdate).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyCaskToScannedApp_SameBundleGenuinelyOutdated_SubAppOutdated_ParentRollsUp()
+    {
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "OrbStack", path: "/Applications/OrbStack.app", installed: "2.2.2");
+        var cask = OrbCask(installed: "2.2.2", latest: "2.2.3", target: "/Applications/OrbStack.app");
+
+        scanner.ApplyCaskToScannedApp(app, cask);
+
+        var sub = app.SubApps![0];
+        await Assert.That(sub.InstalledVersion).IsEqualTo("2.2.2");
+        await Assert.That(sub.LatestVersion).IsEqualTo("2.2.3");
+        await Assert.That(new AppRecord(sub).UpdateAvailable).IsTrue();
+        // Parent's own version is current, but it rolls up the sub-app so the default view still shows it.
+        await Assert.That(new AppRecord(app).UpdateAvailable).IsFalse();
+        await Assert.That(new AppRecord(app).HasUpdate).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplyCaskToScannedApp_DifferentBundleSameName_SubAppKeepsCaskVersion()
+    {
+        // Cask manages a different bundle than the scanned app → not the same install, so the
+        // sub-app keeps the cask's own recorded version rather than the parent's.
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "Foo", path: "/Applications/Foo.app", installed: "1.0");
+        var cask = OrbCask(installed: "3.0", latest: "3.1", target: "/Applications/Bar.app");
+
+        scanner.ApplyCaskToScannedApp(app, cask);
+
+        var sub = app.SubApps![0];
+        await Assert.That(sub.InstalledVersion).IsEqualTo("3.0");
+        await Assert.That(sub.LatestVersion).IsEqualTo("3.1");
+        await Assert.That(app.LatestVersion).IsNull();
+        await Assert.That(app.Attribute.HasFlag(AppAttribute.HomebrewCask)).IsFalse();
+        await Assert.That(new AppRecord(app).HasUpdate).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplyCaskToScannedApp_CaskWithoutExplicitTarget_MatchedByAppName_UsesBundleVersion()
+    {
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "OrbStack", path: "/Applications/OrbStack.app", installed: "2.2.3");
+        var cask = new BrewCaskRecord
+        {
+            Token = "orbstack",
+            Name = ["OrbStack"],
+            Description = "d",
+            LatestVersion = "2.2.3",
+            InstalledVersion = "2.2.2",
+            Artifacts = [new BrewCaskArtifact { App = ["OrbStack.app"] }], // no Target, bare .app name
+        };
+
+        scanner.ApplyCaskToScannedApp(app, cask);
+
+        await Assert.That(app.SubApps![0].InstalledVersion).IsEqualTo("2.2.3");
+        await Assert.That(new AppRecord(app.SubApps[0]).UpdateAvailable).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyCaskToScannedApp_MatchedByBundleId_UsesBundleVersion()
+    {
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "Widget", path: "/Applications/Widget.app", installed: "5.0");
+        app.BundleId = "com.acme.widget";
+        var cask = new BrewCaskRecord
+        {
+            Token = "widget",
+            Name = ["Widget"],
+            Description = "d",
+            LatestVersion = "5.0",
+            InstalledVersion = "4.0",
+            Artifacts = [new BrewCaskArtifact { App = ["com.acme.widget"] }],
+        };
+
+        scanner.ApplyCaskToScannedApp(app, cask);
+
+        await Assert.That(app.SubApps![0].InstalledVersion).IsEqualTo("5.0");
+        await Assert.That(new AppRecord(app.SubApps[0]).UpdateAvailable).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyCaskToScannedApp_PathDiffersOnlyByCase_UsesBundleVersion()
+    {
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "OrbStack", path: "/Applications/OrbStack.app", installed: "2.2.3");
+        var cask = OrbCask(installed: "2.2.2", latest: "2.2.3", target: "/applications/orbstack.app/");
+
+        scanner.ApplyCaskToScannedApp(app, cask);
+
+        await Assert.That(app.SubApps![0].InstalledVersion).IsEqualTo("2.2.3");
+    }
+
+    [Test]
+    public async Task ApplyCaskToScannedApp_NoArtifacts_TrustsNameMatch_UsesBundleVersion()
+    {
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "OrbStack", path: "/Applications/OrbStack.app", installed: "2.2.3");
+        var cask = new BrewCaskRecord
+        {
+            Token = "orbstack",
+            Name = ["OrbStack"],
+            Description = "d",
+            LatestVersion = "2.2.3",
+            InstalledVersion = "2.2.2",
+            Artifacts = null,
+        };
+
+        scanner.ApplyCaskToScannedApp(app, cask);
+
+        await Assert.That(app.SubApps![0].InstalledVersion).IsEqualTo("2.2.3");
+        await Assert.That(new AppRecord(app.SubApps[0]).UpdateAvailable).IsFalse();
+    }
+
+    [Test]
+    public async Task CaskArtifactMatchesApp_NameDiffers_ButPathMatches_ReturnsTrue()
+    {
+        // Manual bundle scanned under one display name; cask names it differently but its
+        // artifact target/app resolves to the same bundle → cross-source dedup should collapse them.
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var manual = ScannedBundle(scanner, "Visual Studio Code", path: "/Applications/Visual Studio Code.app", installed: "1.90");
+        var cask = new BrewCaskRecord
+        {
+            Token = "visual-studio-code",
+            Name = ["Microsoft Visual Studio Code"],
+            Description = "d",
+            LatestVersion = "1.95",
+            InstalledVersion = "1.90",
+            Artifacts = [new BrewCaskArtifact { App = ["Visual Studio Code.app"], Target = "/Applications/Visual Studio Code.app" }],
+        };
+
+        await Assert.That(MacApplicationsScanner.CaskArtifactMatchesApp(cask, manual)).IsTrue();
+        // name-fallback must NOT fire across unrelated apps
+        await Assert.That(MacApplicationsScanner.CaskArtifactMatchesApp(cask, ScannedBundle(scanner, "Other", "/Applications/Other.app", "1.0"))).IsFalse();
+    }
+
+    [Test]
+    public async Task CaskInstallsApp_DifferentBundle_NoSignalMatches_ReturnsFalse()
+    {
+        var scanner = CreateScanner(new StubHttpMessageHandler());
+        var app = ScannedBundle(scanner, "OrbStack", path: "/Applications/OrbStack.app", installed: "2.2.3");
+        app.BundleId = "com.orbstack.OrbStack";
+        var cask = new BrewCaskRecord
+        {
+            Token = "orbstack",
+            Name = ["OrbStack"],
+            Description = "d",
+            LatestVersion = "9.1",
+            InstalledVersion = "9.0",
+            Artifacts = [new BrewCaskArtifact { App = ["OrbStackHelper.app"], Target = "/Applications/OrbStackHelper.app" }],
+        };
+
+        await Assert.That(MacApplicationsScanner.CaskInstallsApp(cask, app)).IsFalse();
+    }
+
+    private static DiscoveredApp ScannedBundle(
+        MacApplicationsScanner scanner,
+        string name,
+        string path,
+        string installed,
+        bool appStore = false)
+    {
+        var attribute = AppAttribute.App | AppAttribute.MacApp | (appStore ? AppAttribute.AppStoreApp : AppAttribute.None);
+        return new DiscoveredApp(scanner, name, new AppIdentifier("Application", "Application"), AppKind.App)
+        {
+            InstalledVersion = installed,
+            Path = path,
+            Attribute = attribute,
+        };
+    }
+
+    private static BrewCaskRecord OrbCask(string installed, string latest, string target) =>
+        new()
+        {
+            Token = "orbstack",
+            Name = ["OrbStack"],
+            Description = "Fast Docker and Linux",
+            LatestVersion = latest,
+            InstalledVersion = installed,
+            Artifacts = [new BrewCaskArtifact { App = ["OrbStack.app"], Target = target }],
+        };
+
+    private static string CreateTempDir()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "apps-brewcache-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private static MacApplicationsScanner CreateScanner(StubHttpMessageHandler handler, IProcessRunner? runner = null) =>
         new(
             new PlistReader(NullLogger<PlistReader>.Instance),
-            new FakeProcessRunner(),
+            runner ?? new FakeProcessRunner(),
             new StubHttpClientFactory(handler),
             NullLogger<MacApplicationsScanner>.Instance);
 

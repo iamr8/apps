@@ -522,11 +522,7 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
             weight: 2f),
         new TableColumn<AppRecord>(
             "Kind",
-            static (app, w) =>
-            {
-                var s = app.App.Kind.ToCliString().PadRight(w);
-                return app.CheckFailed ? AnsiStyle.DarkGray(s) : s;
-            },
+            static (app, w) => app.App.Kind.ToCliString().PadRight(w),
             fixedWidth: 9),
         new TableColumn<AppRecord>(
             "Source",
@@ -574,8 +570,9 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
 
         if (record.CheckFailed)
         {
-            var marked = AnsiStyle.Truncate("? " + displayName.Trim(), w).PadRight(w);
-            return AnsiStyle.DarkGray(marked);
+            // Update status could not be determined — flag the row red, mirroring how outdated
+            // rows are flagged green, rather than prefixing the name with a "?".
+            return AnsiStyle.Red(AnsiStyle.Truncate(displayName.Trim(), w).PadRight(w));
         }
 
         var cellText = AnsiStyle.Truncate(displayName.Trim(), w).PadRight(w);
@@ -737,11 +734,6 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
         var full = qualifier is null ? label : $"{label} ({qualifier})";
         var truncated = AnsiStyle.Truncate(full.Trim(), sourceW).PadRight(sourceW);
 
-        if (record.CheckFailed)
-        {
-            return AnsiStyle.DarkGray(truncated);
-        }
-
         if (qualifier is null || !AnsiStyle.IsAnsi)
         {
             return truncated;
@@ -835,7 +827,7 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
 
         if (record.CheckFailed)
         {
-            return AnsiStyle.DarkGray(AnsiStyle.Truncate(installed, versionW).PadRight(versionW));
+            return AnsiStyle.Red(AnsiStyle.Truncate(installed, versionW).PadRight(versionW));
         }
 
         if (!outdated)

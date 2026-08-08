@@ -81,7 +81,7 @@ public sealed class Orchestrator(
             .Where(a => options.ScopeKind is null || a.App.Kind == options.ScopeKind);
         if (!options.ShowAll)
         {
-            v = v.Where(a => a.UpdateAvailable);
+            v = v.Where(a => a.HasUpdate);
         }
 
         var visible = v
@@ -90,7 +90,7 @@ public sealed class Orchestrator(
 
         renderer.RenderTable(visible);
 
-        var totalDiscovered = resolved.Length;
+        var totalDiscovered = resolved.Sum(a => 1 + (a.App.SubApps?.Count ?? 0));
         var totalPinned = resolved.Count(a => a.IsPinned);
         var totalVulnerable = resolved.Count(a => a.Vulnerabilities is { Count: > 0 });
         var totalUnchecked = Math.Max(0, resolved.Count(a => a.CheckFailed) - errors);
