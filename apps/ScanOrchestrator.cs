@@ -76,8 +76,11 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         {
         }
 
-        renderer.RenderScanComplete(results.Count);
-        logger.LogInformation("Scan complete: {Total} apps discovered", results.Count);
+        // Count sub-apps too (e.g. a Homebrew cask channel of a scanned bundle): they are
+        // discovered here and checked later, so both totals cover the same set.
+        var discoveredCount = results.Values.Sum(a => 1 + (a.SubApps?.Count ?? 0));
+        renderer.RenderScanComplete(discoveredCount);
+        logger.LogInformation("Scan complete: {Total} apps discovered", discoveredCount);
         return results;
     }
 
