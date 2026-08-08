@@ -19,7 +19,7 @@ public sealed class ScanOrchestratorTests
 
         var result = await orch.ScanAsync(kind: null);
 
-        await Assert.That(result.Keys).IsEquivalentTo(new[] { "Firefox", "Slack" });
+        await Assert.That(result.Values.Select(v => v.Name)).IsEquivalentTo(new[] { "Firefox", "Slack" });
     }
 
     [Test]
@@ -31,8 +31,9 @@ public sealed class ScanOrchestratorTests
 
         var result = await orch.ScanAsync(kind: null);
 
-        await Assert.That(result.ContainsKey("KeepMe")).IsTrue();
-        await Assert.That(result.ContainsKey("DropMe")).IsFalse();
+        var names = result.Values.Select(v => v.Name).ToArray();
+        await Assert.That(names).Contains("KeepMe");
+        await Assert.That(names).DoesNotContain("DropMe");
     }
 
     [Test]
@@ -45,8 +46,9 @@ public sealed class ScanOrchestratorTests
 
         var result = await orch.ScanAsync(kind: null);
 
-        await Assert.That(result.ContainsKey("Included")).IsTrue();
-        await Assert.That(result.ContainsKey("Excluded")).IsFalse();
+        var names = result.Values.Select(v => v.Name).ToArray();
+        await Assert.That(names).Contains("Included");
+        await Assert.That(names).DoesNotContain("Excluded");
     }
 
     [Test]
@@ -58,8 +60,9 @@ public sealed class ScanOrchestratorTests
 
         var result = await orch.ScanAsync(kind: AppKind.App);
 
-        await Assert.That(result.ContainsKey("GuiApp")).IsTrue();
-        await Assert.That(result.ContainsKey("CliTool")).IsFalse();
+        var names = result.Values.Select(v => v.Name).ToArray();
+        await Assert.That(names).Contains("GuiApp");
+        await Assert.That(names).DoesNotContain("CliTool");
     }
 
     [Test]
@@ -71,10 +74,27 @@ public sealed class ScanOrchestratorTests
         var result = await orch.ScanAsync(kind: null);
 
         await Assert.That(result.Count).IsEqualTo(1);
-        await Assert.That(result.ContainsKey("Node")).IsTrue();
-        await Assert.That(result["Node"].SubApps).IsNotNull();
-        await Assert.That(result["Node"].SubApps!.Count).IsEqualTo(1);
-        await Assert.That(result["Node"].SubApps![0].IsDuplicate).IsTrue();
+        var node = result.Values.Single(v => v.Name == "Node");
+        await Assert.That(node.SubApps).IsNotNull();
+        await Assert.That(node.SubApps!.Count).IsEqualTo(1);
+        await Assert.That(node.SubApps![0].IsDuplicate).IsTrue();
+    }
+
+    [Test]
+    public async Task ScanAsync_SameNameDifferentKind_KeptSeparate_NotNested()
+    {
+        var scanner = new FakeScanner { Name = "Multi", Kind = AppKind.App | AppKind.Extension }
+            .Add("Claude", AppKind.Extension)
+            .Add("Claude", AppKind.App);
+        var orch = BuildOrchestrator(scanner);
+
+        var result = await orch.ScanAsync(kind: null);
+
+        await Assert.That(result.Count).IsEqualTo(2);
+        var values = result.Values.ToArray();
+        await Assert.That(values.Any(v => v.Name == "Claude" && v.Kind == AppKind.Extension)).IsTrue();
+        await Assert.That(values.Any(v => v.Name == "Claude" && v.Kind == AppKind.App)).IsTrue();
+        await Assert.That(values.All(v => v.SubApps is null)).IsTrue();
     }
 
     [Test]
