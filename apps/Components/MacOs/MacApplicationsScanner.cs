@@ -500,7 +500,7 @@ public sealed partial class MacApplicationsScanner(
         var newestWriteUtc = GetNewestApiCacheWriteUtc(apiCacheDir);
         if (!IsCacheStale(newestWriteUtc, nowUtc, maxAge))
         {
-            logger.LogDebug("Homebrew API cache is fresh (written {Written}), skipping refresh", newestWriteUtc?.ToString("o", CultureInfo.InvariantCulture));
+            logger.LogDebug("Homebrew API cache is fresh (written {Written}), skipping refresh", newestWriteUtc);
             return;
         }
 
@@ -1110,17 +1110,12 @@ public sealed partial class MacApplicationsScanner(
             return null;
         }
 
-        DateTimeOffset? newest = null;
-        foreach (var file in Directory.EnumerateFiles(apiCacheDir, "*.jws.json", SearchOption.AllDirectories))
-        {
-            var write = File.GetLastWriteTimeUtc(file);
-            if (newest is null || write > newest.Value.UtcDateTime)
-            {
-                newest = new DateTimeOffset(write, TimeSpan.Zero);
-            }
-        }
+        var newest = Directory.EnumerateFiles(apiCacheDir, "*.jws.json", SearchOption.AllDirectories)
+            .Select(File.GetLastWriteTimeUtc)
+            .Cast<DateTime?>()
+            .Max();
 
-        return newest;
+        return newest is { } write ? new DateTimeOffset(write, TimeSpan.Zero) : null;
     }
 
     /// <summary>
@@ -1157,19 +1152,13 @@ public sealed partial class MacApplicationsScanner(
                 return true;
             }
 
-            if (artifact.App is not { Length: > 0 })
-            {
-                continue;
-            }
-
-            foreach (var appEntry in artifact.App)
-            {
-                if (PathEquals(appEntry, app.Path) ||
+            if (artifact.App is { Length: > 0 } appEntries &&
+                appEntries.Any(appEntry =>
+                    PathEquals(appEntry, app.Path) ||
                     string.Equals(appEntry, app.BundleId, StringComparison.OrdinalIgnoreCase) ||
-                    (app.Path is { Length: > 0 } path && PathEquals(appEntry, Path.GetFileName(path.TrimEnd('/')))))
-                {
-                    return true;
-                }
+                    (app.Path is { Length: > 0 } path && PathEquals(appEntry, Path.GetFileName(path.TrimEnd('/'))))))
+            {
+                return true;
             }
         }
 
@@ -1204,12 +1193,12 @@ public sealed partial class MacApplicationsScanner(
         var cache = Environment.GetEnvironmentVariable("HOMEBREW_CACHE");
         if (string.IsNullOrWhiteSpace(cache))
         {
-            cache = Path.Combine(
+            cache = Path.Join(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 "Library", "Caches", "Homebrew");
         }
 
-        return Path.Combine(cache, "api");
+        return Path.Join(cache, "api");
     }
 
     /// <summary>
