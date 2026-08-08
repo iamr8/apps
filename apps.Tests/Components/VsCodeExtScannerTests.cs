@@ -60,6 +60,19 @@ public sealed class VsCodeExtScannerTests
     }
 
     [Test]
+    [Arguments("%displayName%", true)]
+    [Arguments("%extension.displayName%", true)]
+    [Arguments("%%", true)]
+    [Arguments("GitHub Pull Requests", false)]
+    [Arguments("100% Cotton", false)]
+    [Arguments("%partial", false)]
+    [Arguments("", false)]
+    public async Task IsNlsPlaceholder_DetectsUnresolvedLocalizationKeys(string value, bool expected)
+    {
+        await Assert.That(VsCodeExtScanner.IsNlsPlaceholder(value)).IsEqualTo(expected);
+    }
+
+    [Test]
     public async Task GetLatestStableVersion_PrefersFirstStableOverPreRelease()
     {
         VsCodeExtVersion[] versions =
