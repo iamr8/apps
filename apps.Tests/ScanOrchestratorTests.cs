@@ -98,6 +98,21 @@ public sealed class ScanOrchestratorTests
     }
 
     [Test]
+    public async Task ScanAsync_SameNameSameKindDifferentScanners_KeptSeparate()
+    {
+        // "EditorConfig" exists as both a JetBrains plugin and a VS Code extension — same name,
+        // same kind, different source. They are unrelated software and must not be merged.
+        var jetbrains = new FakeScanner { Name = "JetBrains", Kind = AppKind.Extension }.Add("EditorConfig", AppKind.Extension);
+        var vscode = new FakeScanner { Name = "VS Code", Kind = AppKind.Extension }.Add("EditorConfig", AppKind.Extension);
+        var orch = BuildOrchestrator(jetbrains, vscode);
+
+        var result = await orch.ScanAsync(kind: null);
+
+        await Assert.That(result.Count).IsEqualTo(2);
+        await Assert.That(result.Values.All(v => v.Name == "EditorConfig" && v.SubApps is null)).IsTrue();
+    }
+
+    [Test]
     public async Task ScanAsync_NoScanners_ReturnsEmpty()
     {
         var orch = BuildOrchestrator();
