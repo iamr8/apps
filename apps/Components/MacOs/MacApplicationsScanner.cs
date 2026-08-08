@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -29,6 +30,8 @@ public sealed partial class MacApplicationsScanner(
 {
     private Dictionary<string, bool> _appsExecutablePaths = [];
     private string? _brewExecutablePath;
+
+    private static readonly TimeSpan DefaultBrewCacheMaxAge = TimeSpan.FromHours(6);
 
     public string Name => "Application";
 
@@ -137,7 +140,7 @@ public sealed partial class MacApplicationsScanner(
         {
             if (record.App.LatestVersion is not null)
             {
-                logger.LogDebug("App {AppName} is already updated to v{Version}", record.App.Name, record.App.InstalledVersion);
+                logger.LogDebug("App {AppName} already has its latest version (v{LatestVersion}) resolved during discovery, skipping remote check", record.App.Name, record.App.LatestVersion);
                 await writer.WriteAsync((record, true, false), cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -382,6 +385,14 @@ public sealed partial class MacApplicationsScanner(
             yield break;
         }
 
+        await RefreshBrewApiCacheIfStaleAsync(
+                _brewExecutablePath!,
+                ResolveBrewApiCacheDir(),
+                DateTimeOffset.UtcNow,
+                ResolveBrewCacheMaxAge(),
+                cancellationToken)
+            .ConfigureAwait(false);
+
         // Run all three commands concurrently — descriptions are a bonus and failures are non-fatal.
         var infoTask = runner.RunAsync(_brewExecutablePath!, "info --json=v2 --installed", cancellationToken);
 
@@ -412,35 +423,19 @@ public sealed partial class MacApplicationsScanner(
         {
             if (_scannedApps.TryGetValue(cask.Name[0], out var app))
             {
-                app.Description ??= cask.Description;
+                ApplyCaskToScannedApp(app, cask);
+                continue;
+            }
 
-                if (cask.InstalledVersion == app.InstalledVersion &&
-                    cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target == app.Path &&
-                    !app.Attribute.HasFlag(AppAttribute.AppStoreApp))
-                {
-                    // We've already scanned this app. Now, we've made sure that this is a Cask
-                    app.BundleId ??= cask.Token;
-                    app.Attribute |= AppAttribute.HomebrewCask;
-                    app.LatestVersion = cask.LatestVersion;
-                    app.Description ??= cask.Description;
-                    app.Path ??= cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target;
-                }
-                else
-                {
-                    // When the pointer reaches this line, means we haven't found this application during our scan
-                    app.SubApps ??= [];
-                    var brewSubApp = new DiscoveredApp(this, cask.Name[0], new AppIdentifier(Name, DisplayName, "Cask"), AppKind.App)
-                    {
-                        BundleId = cask.Token,
-                        Attribute = AppAttribute.App | AppAttribute.MacApp | AppAttribute.HomebrewCask,
-                        InstalledVersion = cask.InstalledVersion,
-                        LatestVersion = cask.LatestVersion,
-                        Description = cask.Description,
-                        Path = cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target,
-                    };
-                    app.SubApps.Add(brewSubApp);
-                }
-
+            // The cask's display name didn't match any scanned bundle, but the same app may have
+            // been installed manually under a different name. Match on hard evidence (artifact
+            // path / bundle id) so the manual bundle and the cask collapse into one entry instead
+            // of being reported twice.
+            var manual = _scannedApps.Values.FirstOrDefault(scanned =>
+                !scanned.Attribute.HasFlag(AppAttribute.AppStoreApp) && CaskArtifactMatchesApp(cask, scanned));
+            if (manual is not null)
+            {
+                ApplyCaskToScannedApp(manual, cask);
                 continue;
             }
 
@@ -456,6 +451,65 @@ public sealed partial class MacApplicationsScanner(
                     ?.Target,
             };
             yield return discoveredApp;
+        }
+    }
+
+    /// <summary>
+    /// Attaches a Homebrew cask to an app already found during the filesystem scan as a sub-app
+    /// (one level deep). The scanned bundle and its cask are two update channels for the same app
+    /// — a Sparkle self-updater versus the cask — whose versions can legitimately differ, so both
+    /// surface: the scanned app stays the parent and the cask becomes its sub-app. When the cask
+    /// installs this very bundle (<see cref="CaskInstallsApp"/>), the on-disk version is
+    /// authoritative — Homebrew's receipt lags for casks that auto-update themselves — so the
+    /// sub-app reports the parent's installed version instead of the stale receipt, avoiding a
+    /// false "outdated". A cask that manages a different bundle keeps its own recorded version.
+    /// </summary>
+    internal void ApplyCaskToScannedApp(DiscoveredApp app, BrewCaskRecord cask)
+    {
+        app.Description ??= cask.Description;
+        app.BundleId ??= cask.Token;
+
+        var installedVersion = CaskInstallsApp(cask, app) ? app.InstalledVersion : cask.InstalledVersion;
+
+        app.SubApps ??= [];
+        app.SubApps.Add(new DiscoveredApp(this, cask.Name[0], new AppIdentifier(Name, DisplayName, "Cask"), AppKind.App)
+        {
+            BundleId = cask.Token,
+            Attribute = AppAttribute.App | AppAttribute.MacApp | AppAttribute.HomebrewCask,
+            InstalledVersion = installedVersion,
+            LatestVersion = cask.LatestVersion,
+            Description = cask.Description,
+            Path = cask.Artifacts?.FirstOrDefault(c => c.App?.Length > 0)?.Target ?? app.Path,
+        });
+    }
+
+    /// <summary>
+    /// Refreshes Homebrew's local API cache via <c>brew update --quiet</c> when it is older than
+    /// <paramref name="maxAge"/>. <c>brew info</c> — the only Homebrew command this scanner runs —
+    /// never triggers Homebrew's own auto-update, so without this the cached <c>versions.stable</c>
+    /// can lag the real latest and outdated formulae/casks are silently reported as up-to-date.
+    /// A failed or slow refresh is non-fatal: a stale cache still yields a best-effort result.
+    /// </summary>
+    internal async Task RefreshBrewApiCacheIfStaleAsync(
+        string brewExe,
+        string apiCacheDir,
+        DateTimeOffset nowUtc,
+        TimeSpan maxAge,
+        CancellationToken cancellationToken)
+    {
+        var newestWriteUtc = GetNewestApiCacheWriteUtc(apiCacheDir);
+        if (!IsCacheStale(newestWriteUtc, nowUtc, maxAge))
+        {
+            logger.LogDebug("Homebrew API cache is fresh (written {Written}), skipping refresh", newestWriteUtc);
+            return;
+        }
+
+        logger.LogDebug("Homebrew API cache is stale (written {Written}), running '{Exe} update' to refresh", newestWriteUtc?.ToString("o", CultureInfo.InvariantCulture) ?? "never", brewExe);
+
+        var result = await runner.RunAsync(brewExe, "update --quiet", cancellationToken).ConfigureAwait(false);
+        if (!result.Success)
+        {
+            logger.LogWarning("'{Exe} update' failed (exit {Code}): {Error}", brewExe, result.ExitCode, result.StandardError.Trim());
         }
     }
 
@@ -1041,6 +1095,122 @@ public sealed partial class MacApplicationsScanner(
     internal static string? Normalize(string? value)
     {
         return value?.Trim().Normalize(NormalizationForm.FormC).Replace("\u200E", string.Empty);
+    }
+
+    /// <summary>
+    /// Returns the most recent write time among <c>*.jws.json</c> files under
+    /// <paramref name="apiCacheDir"/> (Homebrew's downloaded API payloads), or <see langword="null"/>
+    /// when the directory is absent or holds none. Globs recursively so it tracks the payload
+    /// regardless of Homebrew's layout (<c>formula.jws.json</c> vs <c>internal/packages.*.jws.json</c>).
+    /// </summary>
+    internal static DateTimeOffset? GetNewestApiCacheWriteUtc(string apiCacheDir)
+    {
+        if (!Directory.Exists(apiCacheDir))
+        {
+            return null;
+        }
+
+        var newest = Directory.EnumerateFiles(apiCacheDir, "*.jws.json", SearchOption.AllDirectories)
+            .Select(File.GetLastWriteTimeUtc)
+            .Cast<DateTime?>()
+            .Max();
+
+        return newest is { } write ? new DateTimeOffset(write, TimeSpan.Zero) : null;
+    }
+
+    /// <summary>
+    /// Decides whether a cask should merge into <paramref name="app"/> when the two were already
+    /// paired by display name. Merges when the cask's artifacts give positive evidence of this
+    /// bundle (see <see cref="CaskArtifactMatchesApp"/>), or when the cask carries no path evidence
+    /// at all — in which case the display-name match stands. Reusable for any auto-updating cask:
+    /// it never assumes an explicit <c>target</c> is present.
+    /// </summary>
+    internal static bool CaskInstallsApp(BrewCaskRecord cask, DiscoveredApp app)
+    {
+        return CaskArtifactMatchesApp(cask, app) || !CaskHasAppPathEvidence(cask);
+    }
+
+    /// <summary>
+    /// Positive, name-independent evidence that <paramref name="cask"/> installs the same bundle as
+    /// <paramref name="app"/>: an artifact <c>target</c> or <c>app</c> entry that equals the app's
+    /// path, its bundle id, or its <c>*.app</c> file name (case-insensitive, trailing slash ignored).
+    /// Use this for cross-source de-duplication where the display names differ and only hard
+    /// evidence may collapse the two records.
+    /// </summary>
+    internal static bool CaskArtifactMatchesApp(BrewCaskRecord cask, DiscoveredApp app)
+    {
+        if (cask.Artifacts is not { Length: > 0 })
+        {
+            return false;
+        }
+
+        foreach (var artifact in cask.Artifacts)
+        {
+            if (artifact.Target is { Length: > 0 } target &&
+                (PathEquals(target, app.Path) || string.Equals(target, app.BundleId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            if (artifact.App is { Length: > 0 } appEntries &&
+                appEntries.Any(appEntry =>
+                    PathEquals(appEntry, app.Path) ||
+                    string.Equals(appEntry, app.BundleId, StringComparison.OrdinalIgnoreCase) ||
+                    (app.Path is { Length: > 0 } path && PathEquals(appEntry, Path.GetFileName(path.TrimEnd('/'))))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>True when any of the cask's artifacts names an install <c>target</c> or <c>app</c> bundle.</summary>
+    private static bool CaskHasAppPathEvidence(BrewCaskRecord cask)
+    {
+        return cask.Artifacts is { Length: > 0 }
+            && cask.Artifacts.Any(a => a.Target is { Length: > 0 } || a.App is { Length: > 0 });
+    }
+
+    /// <summary>Case-insensitive path comparison that ignores a single trailing slash on either side.</summary>
+    private static bool PathEquals(string? a, string? b)
+    {
+        return a is not null && b is not null && string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A cache is stale when it has never been written or is older than <paramref name="maxAge"/>.</summary>
+    internal static bool IsCacheStale(DateTimeOffset? newestWriteUtc, DateTimeOffset nowUtc, TimeSpan maxAge)
+    {
+        return newestWriteUtc is not { } written || nowUtc - written > maxAge;
+    }
+
+    /// <summary>
+    /// Resolves Homebrew's API cache directory, honouring the <c>HOMEBREW_CACHE</c> override and
+    /// falling back to the default <c>~/Library/Caches/Homebrew</c>.
+    /// </summary>
+    internal static string ResolveBrewApiCacheDir()
+    {
+        var cache = Environment.GetEnvironmentVariable("HOMEBREW_CACHE");
+        if (string.IsNullOrWhiteSpace(cache))
+        {
+            cache = Path.Join(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "Library", "Caches", "Homebrew");
+        }
+
+        return Path.Join(cache, "api");
+    }
+
+    /// <summary>
+    /// Reads the cache freshness window from <c>APPS_BREW_CACHE_MAX_AGE_HOURS</c> (a non-negative
+    /// number of hours), defaulting to <see cref="DefaultBrewCacheMaxAge"/> when unset or invalid.
+    /// </summary>
+    private static TimeSpan ResolveBrewCacheMaxAge()
+    {
+        var raw = Environment.GetEnvironmentVariable("APPS_BREW_CACHE_MAX_AGE_HOURS");
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var hours) && hours >= 0
+            ? TimeSpan.FromHours(hours)
+            : DefaultBrewCacheMaxAge;
     }
 
     /// <summary>

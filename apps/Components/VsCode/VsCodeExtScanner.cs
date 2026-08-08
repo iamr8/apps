@@ -256,7 +256,7 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
                     using var stream = File.OpenRead(pkgPath);
                     var pkg = JsonSerializer.Deserialize(stream, VsCodeJsonContext.Default.VsCodePackageJson);
                     var displayName = pkg?.DisplayName?.Trim();
-                    if (!string.IsNullOrEmpty(displayName) && displayName != extensionId)
+                    if (!string.IsNullOrEmpty(displayName) && displayName != extensionId && !IsNlsPlaceholder(displayName))
                     {
                         index[extensionId] = displayName;
                     }
@@ -299,6 +299,14 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
             Attribute = AppAttribute.VsCodeExtension
         };
     }
+
+    /// <summary>
+    /// True when a package.json <c>displayName</c> is an unresolved NLS localization placeholder
+    /// such as <c>%displayName%</c> — a key into <c>package.nls.json</c> that the manifest never
+    /// inlined. Such values are rejected so the extension id is shown as the name instead.
+    /// </summary>
+    internal static bool IsNlsPlaceholder(string value)
+        => value.Length >= 2 && value[0] == '%' && value[^1] == '%';
 
     /// <summary>
     /// Splits a <c>code --list-extensions --show-versions</c> line of the form

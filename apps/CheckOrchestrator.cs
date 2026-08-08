@@ -78,7 +78,7 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
         {
         }
 
-        var updates = checkedApps.Count(c => c.UpdateAvailable);
+        var updates = checkedApps.Count(c => c.HasUpdate);
         renderer.RenderCheckComplete(total, updates, errors);
         logger.LogInformation(
             "Check complete: {Total} checked, {Updates} updates, {Errors} errors",
