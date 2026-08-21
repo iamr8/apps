@@ -74,8 +74,9 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
         {
             await timerTask.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (timerCts.IsCancellationRequested)
         {
+            logger.LogDebug("Check progress timer cancelled");
         }
 
         var updates = checkedApps.Count(c => c.HasUpdate);
