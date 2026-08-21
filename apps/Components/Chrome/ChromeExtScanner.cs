@@ -26,6 +26,12 @@ public sealed class ChromeExtScanner(IHttpClientFactory httpClientFactory, ILogg
     /// <inheritdoc/>
     public string DisplayName => "Chrome";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "Chrome Extensions";
+
+    /// <inheritdoc/>
+    public string ProgressItemNoun => "extension";
+
     public OS SupportedOS => OS.MacOS | OS.Windows;
     public AppKind Kind => AppKind.Extension;
 

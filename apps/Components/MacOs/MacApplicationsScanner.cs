@@ -38,6 +38,12 @@ public sealed partial class MacApplicationsScanner(
     /// <inheritdoc/>
     public string DisplayName => "Application";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "Applications";
+
+    /// <inheritdoc/>
+    public string ProgressItemNoun => "app";
+
     public OS SupportedOS => OS.MacOS;
     public AppKind Kind => AppKind.App | AppKind.Extension | AppKind.Package;
 

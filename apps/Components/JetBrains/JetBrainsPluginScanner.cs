@@ -27,6 +27,12 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
     /// <inheritdoc/>
     public string DisplayName => "JetBrains";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "JetBrains Plugins";
+
+    /// <inheritdoc/>
+    public string ProgressItemNoun => "plugin";
+
     public OS SupportedOS => OS.MacOS | OS.Windows;
     public AppKind Kind => AppKind.Extension;
 

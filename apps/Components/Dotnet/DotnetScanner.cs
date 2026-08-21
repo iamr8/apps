@@ -29,6 +29,9 @@ public sealed class DotnetScanner(IHttpClientFactory httpClientFactory, IProcess
     /// <inheritdoc/>
     public string DisplayName => ".NET";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => ".NET";
+
     public OS SupportedOS => OS.MacOS | OS.Windows;
     public AppKind Kind => AppKind.DevTool;
 
