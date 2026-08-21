@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 
 using apps.Components.Audit;
 
@@ -18,18 +19,23 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
             .DistinctBy(s => s.Name, StringComparer.Ordinal)
             .ToDictionary(s => s.Name, StringComparer.Ordinal);
 
+    private readonly Dictionary<string, ChecklistRow> _checklistRows = new(StringComparer.Ordinal);
+    private readonly List<string> _checklistOrder = [];
+
+    private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
     private const string Dash = "—";
 
     // Text of the current single-line status (scan or check progress).
     // Empty means no active line is displayed.
     private string _currentStatusLine = "";
 
-    private int _totalScanners;
-    private int _completedScanners;
-    private int _totalToCheck;
-
     private readonly Stopwatch _phaseStopwatch = new();
-    private int _checkDone;
+    private readonly Stopwatch _checklistStopwatch = new();
+    private string _checklistHeading = "";
+    private int _renderedChecklistLines;
+    private int _spinnerFrame;
+    private bool _checklistVisible;
     private int _auditDone;
     private int _auditTotal;
 
@@ -46,127 +52,186 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
         }
     }
 
-    /// <summary>Sets the total number of active scanners so the progress bar knows its denominator.</summary>
-    public void SetScannerCount(int total)
+    /// <summary>Starts a checklist for the active scanners.</summary>
+    public void StartScan(IReadOnlyList<IScanner> activeScanners)
     {
         lock (_lock)
         {
-            _totalScanners = total;
-            _completedScanners = 0;
+            _checklistRows.Clear();
+            _checklistOrder.Clear();
+
+            foreach (var scanner in activeScanners.DistinctBy(s => s.Name, StringComparer.Ordinal))
+            {
+                _checklistRows.Add(scanner.Name, new ChecklistRow(scanner));
+                _checklistOrder.Add(scanner.Name);
+            }
+
+            _checklistHeading = "Scanning";
+            _spinnerFrame = 0;
+            _checklistVisible = true;
+            _checklistStopwatch.Restart();
             _phaseStopwatch.Restart();
+            RenderChecklist();
         }
     }
 
-    /// <summary>Sets the total number of apps that will be checked so the check progress bar is accurate.</summary>
-    public void SetCheckTotal(int total)
+    /// <summary>Starts the check stage for each scanner with discovered items.</summary>
+    public void StartCheck(IReadOnlyList<(IScanner Scanner, int Total)> groups)
     {
         lock (_lock)
         {
-            _totalToCheck = total;
+            var totals = groups.ToDictionary(g => g.Scanner.Name, g => g.Total, StringComparer.Ordinal);
+            foreach (var row in _checklistRows.Values)
+            {
+                row.CheckStarted = true;
+                row.CheckTotal = totals.GetValueOrDefault(row.Scanner.Name);
+                row.State = row.ScanFailed
+                    ? ChecklistProgressState.Failed
+                    : row.CheckTotal == 0
+                        ? ChecklistProgressState.Completed
+                        : ChecklistProgressState.Waiting;
+            }
+
+            _checklistHeading = "Checking";
             _phaseStopwatch.Restart();
+            RenderChecklist();
         }
     }
 
-    /// <summary>
-    /// Updates the single scan-progress line in-place while scanners are active.
-    /// Shows a progress bar indicating how many scanners have completed.
-    /// On a real TTY the line is overwritten via ANSI; on redirected output a new line is
-    /// printed only for the first scanner to avoid polluting piped output.
-    /// </summary>
+    /// <summary>Marks a scanner as active.</summary>
     public void RenderScannerActive(string scannerName)
     {
         lock (_lock)
         {
-            var bar = AnsiStyle.ProgressBar(_completedScanners, _totalScanners);
-            var label = AnsiStyle.Cyan("Scanning");
-            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
-            var line = $"{bar}  {label} {AnsiStyle.Bold(scannerName)}… {elapsed}";
-            var firstLine = _currentStatusLine.Length == 0;
-            _currentStatusLine = line;
-
-            if (AnsiStyle.IsAnsi)
+            if (_checklistRows.TryGetValue(scannerName, out var row))
             {
-                Console.Error.Write($"\r\e[2K{line}");
-            }
-            else if (firstLine)
-            {
-                Console.Error.WriteLine($"● Scanning {scannerName}…");
+                row.State = ChecklistProgressState.Scanning;
+                RenderChecklist();
             }
         }
     }
 
-    /// <summary>Marks a scanner as completed and refreshes the progress bar.</summary>
+    /// <summary>Updates the number of items found by a scanner.</summary>
+    public void RenderScannerProgress(string scannerName, int discovered)
+    {
+        lock (_lock)
+        {
+            if (_checklistRows.TryGetValue(scannerName, out var row))
+            {
+                row.Discovered = discovered;
+                RenderChecklist();
+            }
+        }
+    }
+
+    /// <summary>Marks a scanner as waiting for the check stage.</summary>
     public void RenderScannerDone(string scannerName)
     {
         lock (_lock)
         {
-            _completedScanners++;
-
-            var bar = AnsiStyle.ProgressBar(_completedScanners, _totalScanners);
-            var label = AnsiStyle.Cyan("Scanning");
-            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
-            var line = $"{bar}  {label} {AnsiStyle.Dim(scannerName)} ✓ {elapsed}";
-            _currentStatusLine = line;
-
-            if (AnsiStyle.IsAnsi)
+            if (_checklistRows.TryGetValue(scannerName, out var row))
             {
-                Console.Error.Write($"\r\e[2K{line}");
+                row.State = ChecklistProgressState.Waiting;
+                RenderChecklist();
             }
         }
     }
 
-    /// <summary>Clears the scan-progress line and prints the total discovered count.</summary>
-    public void RenderScanComplete(int total)
+    /// <summary>Marks a scanner as failed.</summary>
+    public void RenderScannerFailed(string scannerName)
     {
         lock (_lock)
         {
-            ClearStatusLine();
-            var bar = AnsiStyle.ProgressBar(_totalScanners, _totalScanners);
-            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
-            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Discovered {AnsiStyle.Bold(total.ToString())} apps {elapsed}");
-            _currentStatusLine = "";
-        }
-    }
-
-    /// <summary>
-    /// Updates the single check-progress line in-place as each result arrives.
-    /// Shows a progress bar indicating how many checks have completed out of the total.
-    /// </summary>
-    public void RenderCheckActive(int done)
-    {
-        lock (_lock)
-        {
-            _checkDone = done;
-            var bar = AnsiStyle.ProgressBar(done, _totalToCheck);
-            var label = AnsiStyle.Magenta("Checking");
-            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
-            var line = $"{bar}  {label} {AnsiStyle.Bold(done.ToString())}/{_totalToCheck} apps… {elapsed}";
-            _currentStatusLine = line;
-
-            if (AnsiStyle.IsAnsi)
+            if (_checklistRows.TryGetValue(scannerName, out var row))
             {
-                Console.Error.Write($"\r\e[2K{line}");
+                row.ScanFailed = true;
+                row.State = ChecklistProgressState.Failed;
+                RenderChecklist();
             }
         }
     }
 
-    /// <summary>
-    /// Clears the check-progress line and prints a summary of the check phase.
-    /// </summary>
-    public void RenderCheckComplete(int total, int updates, int errors)
+    /// <summary>Marks the scan stage as complete while the checklist waits for checks.</summary>
+    public void RenderScanComplete()
     {
         lock (_lock)
         {
-            ClearStatusLine();
-            _currentStatusLine = "";
+            _checklistHeading = "Scan complete";
+            RenderChecklist();
+        }
+    }
 
-            var bar = AnsiStyle.ProgressBar(total, total);
-            var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
-            var updateStr = updates > 0
-                ? AnsiStyle.Yellow($"{updates} update{(updates == 1 ? "" : "s")} available")
-                : AnsiStyle.Green("up to date");
-            var errorPart = errors > 0 ? "  " + AnsiStyle.Red($"{errors} error{(errors == 1 ? "" : "s")}") : "";
-            Console.Error.WriteLine($"{bar}  {AnsiStyle.Green("✓")} Checked {AnsiStyle.Bold(total.ToString())} apps — {updateStr}{errorPart} {elapsed}");
+    /// <summary>Completes the checklist after a scan-only run.</summary>
+    public void RenderDryRunComplete()
+    {
+        lock (_lock)
+        {
+            foreach (var row in _checklistRows.Values.Where(r => !r.ScanFailed))
+            {
+                row.State = ChecklistProgressState.Completed;
+            }
+
+            _checklistHeading = "Scan complete";
+            FinalizeChecklist();
+        }
+    }
+
+    /// <summary>Marks a scanner as actively checking its discovered items.</summary>
+    public void RenderCheckActive(string scannerName)
+    {
+        lock (_lock)
+        {
+            if (_checklistRows.TryGetValue(scannerName, out var row))
+            {
+                row.State = ChecklistProgressState.Checking;
+                RenderChecklist();
+            }
+        }
+    }
+
+    /// <summary>Updates one scanner's completed check, update, and failure counts.</summary>
+    public void RenderCheckProgress(string scannerName, bool updateAvailable, bool failed)
+    {
+        lock (_lock)
+        {
+            if (!_checklistRows.TryGetValue(scannerName, out var row))
+            {
+                return;
+            }
+
+            row.Checked++;
+            row.Updates += updateAvailable ? 1 : 0;
+            row.Failures += failed ? 1 : 0;
+            if (row.Checked >= row.CheckTotal)
+            {
+                row.State = row.ScanFailed || row.Failures > 0
+                    ? ChecklistProgressState.Failed
+                    : ChecklistProgressState.Completed;
+            }
+
+            RenderChecklist();
+        }
+    }
+
+    /// <summary>Completes the checklist after all update checks finish.</summary>
+    public void RenderCheckComplete()
+    {
+        lock (_lock)
+        {
+            foreach (var row in _checklistRows.Values)
+            {
+                if (row.CheckTotal > row.Checked)
+                {
+                    row.Failures += row.CheckTotal - row.Checked;
+                }
+
+                row.State = row.ScanFailed || row.Failures > 0
+                    ? ChecklistProgressState.Failed
+                    : ChecklistProgressState.Completed;
+            }
+
+            _checklistHeading = "Completed";
+            FinalizeChecklist();
         }
     }
 
@@ -176,13 +241,6 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
     /// </summary>
     public void RenderTable(IReadOnlyList<AppRecord> apps)
     {
-        // On a real terminal, wipe the transient progress/status lines so results start on a clean screen.
-        // Skipped when output is redirected (no in-place progress was drawn, and clearing would throw).
-        if (AnsiStyle.IsAnsi)
-        {
-            RenderClear();
-        }
-
         PrintTableFmt(apps);
     }
 
@@ -191,6 +249,15 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
     {
         lock (_lock)
         {
+            if (_checklistVisible)
+            {
+                ClearChecklist();
+                Console.Error.WriteLine(AnsiStyle.Red($"✗ {message}"));
+                _renderedChecklistLines = 0;
+                RenderChecklist();
+                return;
+            }
+
             ClearStatusLine();
             Console.Error.WriteLine(AnsiStyle.Red($"✗ {message}"));
             RestoreStatusLine();
@@ -361,12 +428,30 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
     }
 
     private static string FormatElapsed(double seconds)
-        => AnsiStyle.DarkGray($"[{seconds:F1}s]");
+        => AnsiStyle.DarkGray($"[{seconds.ToString("F1", CultureInfo.InvariantCulture)}s]");
 
-    /// <summary>
-    /// Background task that refreshes the scan progress line every 100ms with updated elapsed time.
-    /// </summary>
-    public async Task RunScanTimerAsync(CancellationToken cancellationToken)
+    /// <summary>Refreshes the checklist spinner and elapsed time during scanning.</summary>
+    public Task RunScanTimerAsync(CancellationToken cancellationToken) => RunChecklistTimerAsync(cancellationToken);
+
+    /// <summary>Refreshes the checklist spinner and elapsed time during update checks.</summary>
+    public Task RunCheckTimerAsync(CancellationToken cancellationToken) => RunChecklistTimerAsync(cancellationToken);
+
+    internal ChecklistProgressSnapshot GetChecklistSnapshot(string scannerName)
+    {
+        lock (_lock)
+        {
+            var row = _checklistRows[scannerName];
+            return new ChecklistProgressSnapshot(
+                row.State,
+                row.Discovered,
+                row.CheckTotal,
+                row.Checked,
+                row.Updates,
+                row.Failures);
+        }
+    }
+
+    private async Task RunChecklistTimerAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -381,51 +466,169 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
 
             lock (_lock)
             {
-                if (!AnsiStyle.IsAnsi || _currentStatusLine.Length == 0)
+                if (!AnsiStyle.IsAnsi || !_checklistVisible)
                 {
                     continue;
                 }
 
-                var bar = AnsiStyle.ProgressBar(_completedScanners, _totalScanners);
-                var label = AnsiStyle.Cyan("Scanning");
-                var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
-                var line = $"{bar}  {label} {elapsed}";
-                _currentStatusLine = line;
-                Console.Error.Write($"\r\e[2K{line}");
+                _spinnerFrame = (_spinnerFrame + 1) % SpinnerFrames.Length;
+                RenderChecklist();
             }
         }
     }
 
-    /// <summary>
-    /// Background task that refreshes the check progress line every 100ms with updated elapsed time.
-    /// </summary>
-    public async Task RunCheckTimerAsync(CancellationToken cancellationToken)
+    private void FinalizeChecklist()
     {
-        while (!cancellationToken.IsCancellationRequested)
+        _checklistStopwatch.Stop();
+        if (AnsiStyle.IsAnsi)
         {
-            try
+            RenderChecklist();
+        }
+        else
+        {
+            foreach (var line in BuildChecklistLines(int.MaxValue))
             {
-                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+                Console.Error.WriteLine(line);
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+        }
 
-            lock (_lock)
-            {
-                if (!AnsiStyle.IsAnsi || _currentStatusLine.Length == 0)
-                {
-                    continue;
-                }
+        Console.Error.WriteLine();
+        _checklistVisible = false;
+        _renderedChecklistLines = 0;
+    }
 
-                var bar = AnsiStyle.ProgressBar(_checkDone, _totalToCheck);
-                var label = AnsiStyle.Magenta("Checking");
-                var elapsed = FormatElapsed(_phaseStopwatch.Elapsed.TotalSeconds);
-                var line = $"{bar}  {label} {AnsiStyle.Bold(_checkDone.ToString())}/{_totalToCheck} apps… {elapsed}";
-                _currentStatusLine = line;
-                Console.Error.Write($"\r\e[2K{line}");
+    private void RenderChecklist()
+    {
+        if (!AnsiStyle.IsAnsi || !_checklistVisible)
+        {
+            return;
+        }
+
+        var lines = BuildChecklistLines(GetConsoleWidth());
+        ClearChecklist();
+        foreach (var line in lines)
+        {
+            Console.Error.Write("\e[2K");
+            Console.Error.WriteLine(line);
+        }
+
+        _renderedChecklistLines = lines.Length;
+    }
+
+    private void ClearChecklist()
+    {
+        if (!AnsiStyle.IsAnsi || _renderedChecklistLines == 0)
+        {
+            return;
+        }
+
+        Console.Error.Write($"\e[{_renderedChecklistLines}F");
+        for (var i = 0; i < _renderedChecklistLines; i++)
+        {
+            Console.Error.Write("\e[2K");
+            if (i < _renderedChecklistLines - 1)
+            {
+                Console.Error.Write("\e[1E");
             }
+        }
+
+        if (_renderedChecklistLines > 1)
+        {
+            Console.Error.Write($"\e[{_renderedChecklistLines - 1}F");
+        }
+    }
+
+    private string[] BuildChecklistLines(int width)
+    {
+        var elapsed = _checklistStopwatch.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture);
+        var heading = $"{_checklistHeading} [{elapsed}s]";
+        var lines = new string[_checklistOrder.Count + 2];
+        lines[0] = TruncateChecklistText(heading, width);
+        lines[1] = "";
+
+        for (var i = 0; i < _checklistOrder.Count; i++)
+        {
+            lines[i + 2] = FormatChecklistRow(_checklistRows[_checklistOrder[i]], width);
+        }
+
+        return lines;
+    }
+
+    private string FormatChecklistRow(ChecklistRow row, int width)
+    {
+        var indicator = row.State switch
+        {
+            ChecklistProgressState.Waiting => AnsiStyle.DarkGray("[ ]"),
+            ChecklistProgressState.Scanning => AnsiStyle.White($"[{SpinnerFrames[_spinnerFrame]}]"),
+            ChecklistProgressState.Checking => AnsiStyle.Yellow($"[{SpinnerFrames[_spinnerFrame]}]"),
+            ChecklistProgressState.Completed => AnsiStyle.Green("[✓]"),
+            ChecklistProgressState.Failed => AnsiStyle.Red("[!]"),
+            _ => throw new InvalidOperationException($"Unknown checklist state: {row.State}")
+        };
+        var text = row.Scanner.ProgressLabel + FormatChecklistDetails(row);
+        return indicator + " " + TruncateChecklistText(text, Math.Max(1, width - 4));
+    }
+
+    private static string FormatChecklistDetails(ChecklistRow row)
+    {
+        if (row.Discovered == 0 && row.State is ChecklistProgressState.Waiting or ChecklistProgressState.Scanning)
+        {
+            return "";
+        }
+
+        var count = FormatCount(row.Discovered, row.Scanner.ProgressItemNoun);
+        if (!row.CheckStarted)
+        {
+            return $": {count}";
+        }
+
+        if (row.State == ChecklistProgressState.Checking)
+        {
+            return $": {count} · checking {row.Checked}/{row.CheckTotal}";
+        }
+
+        if (row.ScanFailed)
+        {
+            return $": {count} · scan failed";
+        }
+
+        if (row.Failures > 0)
+        {
+            var updates = row.Updates > 0 ? $" · {FormatCount(row.Updates, "update")}" : "";
+            return $": {count}{updates} · {FormatCount(row.Failures, "failure")}";
+        }
+
+        if (row.CheckTotal == 0)
+        {
+            return $": {count} · nothing to check";
+        }
+
+        return row.Updates > 0
+            ? $": {count} · {FormatCount(row.Updates, "update")}"
+            : $": {count} · up to date";
+    }
+
+    private static string FormatCount(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
+
+    private static string TruncateChecklistText(string text, int width)
+    {
+        if (width <= 1)
+        {
+            return text[..Math.Min(text.Length, width)];
+        }
+
+        return text.Length <= width ? text : text[..(width - 1)] + "…";
+    }
+
+    private static int GetConsoleWidth()
+    {
+        try
+        {
+            return Math.Max(20, Console.WindowWidth - 1);
+        }
+        catch (IOException)
+        {
+            return 120;
         }
     }
 
@@ -886,4 +1089,34 @@ public sealed class LiveProgressRenderer(IEnumerable<IScanner> scanners)
         var colonIdx = afterPrefix.IndexOf(':');
         return colonIdx > 0 ? afterPrefix[..colonIdx].ToString() : afterPrefix.ToString();
     }
+
+    private sealed class ChecklistRow(IScanner scanner)
+    {
+        public IScanner Scanner { get; } = scanner;
+        public ChecklistProgressState State { get; set; } = ChecklistProgressState.Waiting;
+        public int Discovered { get; set; }
+        public int CheckTotal { get; set; }
+        public int Checked { get; set; }
+        public int Updates { get; set; }
+        public int Failures { get; set; }
+        public bool CheckStarted { get; set; }
+        public bool ScanFailed { get; set; }
+    }
 }
+
+internal enum ChecklistProgressState
+{
+    Waiting,
+    Scanning,
+    Checking,
+    Completed,
+    Failed
+}
+
+internal readonly record struct ChecklistProgressSnapshot(
+    ChecklistProgressState State,
+    int Discovered,
+    int CheckTotal,
+    int Checked,
+    int Updates,
+    int Failures);

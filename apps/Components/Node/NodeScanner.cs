@@ -32,6 +32,9 @@ public sealed class NodeScanner(IProcessRunner runner, IHttpClientFactory httpCl
     /// <inheritdoc/>
     public string DisplayName => "Node";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "Node";
+
     public OS SupportedOS => OS.MacOS | OS.Windows;
     public AppKind Kind => AppKind.DevTool | AppKind.Package;
 

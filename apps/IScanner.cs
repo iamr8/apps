@@ -12,6 +12,12 @@ public interface IScanner
     /// <summary>Human-readable label shown in the <c>Source</c> output column (e.g. "App Store", ".NET").</summary>
     string DisplayName { get; }
 
+    /// <summary>Human-readable category label shown in the progress checklist.</summary>
+    string ProgressLabel => DisplayName;
+
+    /// <summary>Singular name for an item reported by this scanner.</summary>
+    string ProgressItemNoun => "item";
+
     OS SupportedOS { get; }
     AppKind Kind { get; }
     

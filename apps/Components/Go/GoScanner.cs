@@ -20,6 +20,12 @@ public sealed class GoScanner(IProcessRunner runner, IHttpClientFactory httpClie
     /// <inheritdoc/>
     public string DisplayName => "Go";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "Go Tools";
+
+    /// <inheritdoc/>
+    public string ProgressItemNoun => "tool";
+
     public OS SupportedOS => OS.MacOS | OS.Windows;
     public AppKind Kind => AppKind.DevTool;
 

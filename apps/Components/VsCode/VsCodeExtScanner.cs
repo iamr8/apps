@@ -22,6 +22,12 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
     /// <inheritdoc/>
     public string DisplayName => "VS Code";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "VS Code Extensions";
+
+    /// <inheritdoc/>
+    public string ProgressItemNoun => "extension";
+
     public OS SupportedOS => OS.MacOS | OS.Windows;
     public AppKind Kind => AppKind.Extension;
 
