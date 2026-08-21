@@ -72,8 +72,9 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         {
             await timerTask.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (timerCts.IsCancellationRequested)
         {
+            logger.LogDebug("Scan progress timer cancelled");
         }
 
         // Count sub-apps too (e.g. a Homebrew cask channel of a scanned bundle): they are
