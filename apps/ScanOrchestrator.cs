@@ -32,12 +32,12 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
             return [];
         }
 
-        renderer.SetScannerCount(activeScanners.Length);
+        renderer.StartScan(activeScanners);
 
         // Pre-establish HTTP connections to registry hosts while scanners run.
         var warmupTask = warmup.WarmAsync(cancellationToken);
 
-        // Periodic timer to refresh the scan progress line with updated elapsed time
+        // Periodic timer to animate the scan checklist and refresh elapsed time.
         using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var timerTask = renderer.RunScanTimerAsync(timerCts.Token);
 
@@ -80,7 +80,7 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         // Count sub-apps too (e.g. a Homebrew cask channel of a scanned bundle): they are
         // discovered here and checked later, so both totals cover the same set.
         var discoveredCount = results.Values.Sum(a => 1 + (a.SubApps?.Count ?? 0));
-        renderer.RenderScanComplete(discoveredCount);
+        renderer.RenderScanComplete();
         logger.LogInformation("Scan complete: {Total} apps discovered", discoveredCount);
         return results;
     }
@@ -89,6 +89,7 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
     {
         // TODO: needs optimization
         var discovered = await ScanAsync(kind: null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        renderer.RenderDryRunComplete();
         var match = discovered.FirstOrDefault(a => string.Equals(a.Value.Name, packageName, StringComparison.OrdinalIgnoreCase));
         return match.Value;
     }
@@ -131,6 +132,7 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
     private async Task RunScannerAsync(IScanner scanner, ChannelWriter<DiscoveredApp> writer, CancellationToken cancellationToken)
     {
         renderer.RenderScannerActive(scanner.Name);
+        var discovered = 0;
 
         try
         {
@@ -142,6 +144,8 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
                 }
 
                 await writer.WriteAsync(app, cancellationToken).ConfigureAwait(false);
+                discovered++;
+                renderer.RenderScannerProgress(scanner.Name, discovered);
             }
         }
         catch (OperationCanceledException)
@@ -151,7 +155,9 @@ public sealed class ScanOrchestrator(IEnumerable<IScanner> scanners, ConnectionW
         catch (Exception ex)
         {
             logger.LogError(ex, "Scanner {Name} failed", scanner.Name);
+            renderer.RenderScannerFailed(scanner.Name);
             renderer.RenderError($"Scanner {scanner.Name}: {ex.Message}");
+            return;
         }
 
         renderer.RenderScannerDone(scanner.Name);

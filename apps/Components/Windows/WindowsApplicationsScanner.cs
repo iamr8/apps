@@ -25,6 +25,12 @@ public sealed class WindowsApplicationsScanner(IProcessRunner runner, ILogger<Wi
     /// <inheritdoc/>
     public string DisplayName => "Application";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "Applications";
+
+    /// <inheritdoc/>
+    public string ProgressItemNoun => "app";
+
     public OS SupportedOS => OS.Windows;
     public AppKind Kind => AppKind.App;
 

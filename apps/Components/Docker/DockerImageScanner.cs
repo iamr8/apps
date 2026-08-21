@@ -27,6 +27,12 @@ public sealed class DockerImageScanner(IProcessRunner runner, IHttpClientFactory
     /// <inheritdoc/>
     public string DisplayName => "Docker";
 
+    /// <inheritdoc/>
+    public string ProgressLabel => "Docker Images";
+
+    /// <inheritdoc/>
+    public string ProgressItemNoun => "image";
+
     public OS SupportedOS => OS.MacOS | OS.Windows;
     public AppKind Kind => AppKind.DevTool;
 

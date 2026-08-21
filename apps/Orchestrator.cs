@@ -54,6 +54,7 @@ public sealed class Orchestrator(
                 //.Select(PickBestRecord)
                 .OrderBy(a => KindOrder(a.App.Kind)).ThenBy(a => a.App.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            renderer.RenderDryRunComplete();
             renderer.RenderTable(scanned);
             return 0;
         }

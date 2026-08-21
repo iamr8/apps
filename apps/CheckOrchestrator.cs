@@ -40,10 +40,9 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
             appGroups.Add((scanner, groupedByScanner));
         }
 
-        var totalToCheck = appGroups.Sum(g => g.Apps.Length);
-        renderer.SetCheckTotal(totalToCheck);
+        renderer.StartCheck(appGroups.Select(g => (g.Scanner, g.Apps.Length)).ToArray());
 
-        // Periodic timer to refresh the check progress line with updated elapsed time
+        // Periodic timer to animate the check checklist and refresh elapsed time.
         using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var timerTask = renderer.RunCheckTimerAsync(timerCts.Token);
 
@@ -66,7 +65,7 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
 
             app.CheckFailed = app.CheckFailed || error;
             checkedApps.Add(app);
-            renderer.RenderCheckActive(total);
+            renderer.RenderCheckProgress(app.App.Source.Name, app.HasUpdate, app.CheckFailed);
         }
 
         await timerCts.CancelAsync().ConfigureAwait(false);
@@ -80,7 +79,7 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
         }
 
         var updates = checkedApps.Count(c => c.HasUpdate);
-        renderer.RenderCheckComplete(total, updates, errors);
+        renderer.RenderCheckComplete();
         logger.LogInformation(
             "Check complete: {Total} checked, {Updates} updates, {Errors} errors",
             total, updates, errors);
@@ -88,11 +87,13 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
         return (total, updates, errors);
     }
 
-    private static async Task RunCheckGroupAsync(
+    private async Task RunCheckGroupAsync(
         (IScanner Scanner, AppRecord[] Apps) group,
         ChannelWriter<(AppRecord App, bool Error)> writer,
         CancellationToken cancellationToken)
     {
+        renderer.RenderCheckActive(group.Scanner.Name);
+
         await foreach (var result in group.Scanner.CheckAsync(group.Apps, cancellationToken).ConfigureAwait(false))
         {
             await writer.WriteAsync(result, cancellationToken).ConfigureAwait(false);

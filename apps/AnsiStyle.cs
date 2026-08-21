@@ -17,6 +17,9 @@ internal static class AnsiStyle
     /// <summary>Applies red foreground.</summary>
     internal static string Red(string s) => IsAnsi ? $"\e[31m{s}\e[0m" : s;
 
+    /// <summary>Applies white foreground.</summary>
+    internal static string White(string s) => IsAnsi ? $"\e[37m{s}\e[0m" : s;
+
     /// <summary>Applies cyan foreground.</summary>
     internal static string Cyan(string s) => IsAnsi ? $"\e[36m{s}\e[0m" : s;
 
