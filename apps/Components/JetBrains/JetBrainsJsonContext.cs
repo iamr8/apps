@@ -23,6 +23,12 @@ internal sealed class JetBrainsCompatibleUpdateRequest
 
     [JsonPropertyName("pluginXMLIds")]
     public required string[] PluginXmlIds { get; init; }
+
+    [JsonPropertyName("os")]
+    public required string Os { get; init; }
+
+    [JsonPropertyName("arch")]
+    public required string Arch { get; init; }
 }
 
 /// <summary>

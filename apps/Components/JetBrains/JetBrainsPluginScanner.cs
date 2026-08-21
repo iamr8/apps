@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using System.Xml;
 
@@ -184,7 +185,11 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
             try
             {
                 using var client = httpClientFactory.CreateClient("jetbrains");
-                var request = new JetBrainsCompatibleUpdateRequest { Build = build, PluginXmlIds = xmlIds! };
+                var request = CreateCompatibleUpdateRequest(
+                    build,
+                    xmlIds!,
+                    GetCurrentOperatingSystem(),
+                    RuntimeInformation.ProcessArchitecture);
                 using var content = JsonContent.Create(request, JetBrainsJsonContext.Default.JetBrainsCompatibleUpdateRequest);
                 using var response = await client.PostAsync("/api/search/compatibleUpdates", content, cancellationToken).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
@@ -442,5 +447,45 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
         }
 
         return (id, name, version, displayId);
+    }
+
+    internal static JetBrainsCompatibleUpdateRequest CreateCompatibleUpdateRequest(
+        string build,
+        string[] pluginXmlIds,
+        OS operatingSystem,
+        Architecture architecture) =>
+        new()
+        {
+            Build = build,
+            PluginXmlIds = pluginXmlIds,
+            Os = operatingSystem switch
+            {
+                OS.MacOS => "macOS",
+                OS.Windows => "Windows",
+                _ => "Other"
+            },
+            Arch = architecture switch
+            {
+                Architecture.X86 => "X86",
+                Architecture.X64 => "X86_64",
+                Architecture.Arm or Architecture.Armv6 => "ARM32",
+                Architecture.Arm64 => "ARM64",
+                _ => "OTHER"
+            }
+        };
+
+    private static OS GetCurrentOperatingSystem()
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            return OS.MacOS;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return OS.Windows;
+        }
+
+        return OS.None;
     }
 }
