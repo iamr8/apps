@@ -1,4 +1,6 @@
 using System.Net;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 
 using apps.Components.JetBrains;
 using apps.Tests.Fakes;
@@ -100,6 +102,50 @@ public sealed class JetBrainsPluginScannerTests
     {
         await Assert.That(() => JetBrainsPluginScanner.ParsePluginXml("not xml <"))
             .Throws<System.Xml.XmlException>();
+    }
+
+    [Test]
+    [Arguments(OS.MacOS, Architecture.Arm64, "macOS", "ARM64")]
+    [Arguments(OS.MacOS, Architecture.X64, "macOS", "X86_64")]
+    [Arguments(OS.Windows, Architecture.Arm64, "Windows", "ARM64")]
+    [Arguments(OS.Windows, Architecture.X64, "Windows", "X86_64")]
+    [Arguments(OS.Windows, Architecture.X86, "Windows", "X86")]
+    [Arguments(OS.Windows, Architecture.Arm, "Windows", "ARM32")]
+    [Arguments(OS.Windows, Architecture.Armv6, "Windows", "ARM32")]
+    [Arguments(OS.None, Architecture.Wasm, "Other", "OTHER")]
+    public async Task CreateCompatibleUpdateRequest_MapsMarketplacePlatform(
+        OS operatingSystem,
+        Architecture architecture,
+        string expectedOs,
+        string expectedArchitecture)
+    {
+        var request = JetBrainsPluginScanner.CreateCompatibleUpdateRequest(
+            "RD-262.9437.287",
+            ["com.intellij.platform.daemon"],
+            operatingSystem,
+            architecture);
+
+        await Assert.That(request.Os).IsEqualTo(expectedOs);
+        await Assert.That(request.Arch).IsEqualTo(expectedArchitecture);
+    }
+
+    [Test]
+    public async Task CreateCompatibleUpdateRequest_SerializesPlatformFilters()
+    {
+        var request = JetBrainsPluginScanner.CreateCompatibleUpdateRequest(
+            "RD-262.9437.287",
+            ["com.intellij.platform.daemon"],
+            OS.MacOS,
+            Architecture.Arm64);
+
+        var json = JsonSerializer.Serialize(request, JetBrainsJsonContext.Default.JetBrainsCompatibleUpdateRequest);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        await Assert.That(root.GetProperty("build").GetString()).IsEqualTo("RD-262.9437.287");
+        await Assert.That(root.GetProperty("pluginXMLIds")[0].GetString()).IsEqualTo("com.intellij.platform.daemon");
+        await Assert.That(root.GetProperty("os").GetString()).IsEqualTo("macOS");
+        await Assert.That(root.GetProperty("arch").GetString()).IsEqualTo("ARM64");
     }
 
     [Test]
