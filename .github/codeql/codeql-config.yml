@@ -2,5 +2,9 @@ name: "CodeQL config"
 
 # The shipped CLI (apps/) is the security surface. The test project is not published, so its findings
 # (nullable-dereference in fakes, etc.) are noise — exclude it from analysis.
+# Build output (obj/, bin/) holds source-generated code we do not author (e.g. the System.Text.Json
+# context), so its findings are noise too — exclude it.
 paths-ignore:
   - "apps.Tests/**"
+  - "**/obj/**"
+  - "**/bin/**"

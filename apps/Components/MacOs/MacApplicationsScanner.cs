@@ -1343,16 +1343,12 @@ public sealed partial class MacApplicationsScanner(
             return [];
         }
 
-        var bases = new List<string[]>();
-        foreach (var b in baseTokens)
-        {
-            if (b.Length > 0)
-            {
-                bases.Add(b.Split('-'));
-            }
-        }
+        var bases = baseTokens
+            .Where(b => b.Length > 0)
+            .Select(b => b.Split('-'))
+            .ToArray();
 
-        if (bases.Count == 0)
+        if (bases.Length == 0)
         {
             return [];
         }
