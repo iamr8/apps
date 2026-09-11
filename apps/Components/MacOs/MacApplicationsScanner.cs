@@ -33,6 +33,20 @@ public sealed partial class MacApplicationsScanner(
 
     private static readonly TimeSpan DefaultBrewCacheMaxAge = TimeSpan.FromHours(6);
 
+    private static readonly HashSet<string> ChannelMarkers = new(StringComparer.Ordinal)
+    {
+        "beta", "nightly", "insiders", "insider", "preview", "canary", "dev", "alpha", "rc"
+    };
+
+    private const int MaxFuzzyCaskCandidates = 6;
+
+    /// <summary>
+    /// The full Homebrew cask token list, used by the fuzzy fallback when a derived token does not
+    /// equal the real cask token. Loaded lazily from the local Homebrew cache and empty when Homebrew
+    /// is not installed. Overridable in tests.
+    /// </summary>
+    internal Lazy<string[]> CaskTokenNames { get; init; } = new(LoadCaskTokenNames);
+
     public string Name => "Application";
 
     /// <inheritdoc/>
@@ -962,15 +976,53 @@ public sealed partial class MacApplicationsScanner(
     private static partial Regex VersionNumberRegex();
 
     /// <summary>
-    /// Queries <c>https://formulae.brew.sh/api/cask/{token}.json</c> for the latest version.
-    /// Returns <c>null</c> on any failure (network, 404, parse error).
+    /// Resolves the latest version from <c>https://formulae.brew.sh/api/cask/{token}.json</c> by
+    /// trying each candidate token (see <see cref="CaskTokenCandidates"/>) and returning the first
+    /// cask whose artifacts resolve to this app. Returns <c>null</c> when no candidate matches.
     /// </summary>
     private async Task<(string LatestVersion, string? Description)?> GetLatestVersionByCaskAsync(AppRecord record, CancellationToken cancellationToken)
     {
-        var token = CreateToken(record.App.Name);
+        using var client = httpClientFactory.CreateClient("homebrew-api");
+
+        var direct = CaskTokenCandidates(record.App.Name, record.App.Path).ToArray();
+        foreach (var token in direct)
+        {
+            var match = await TryResolveCaskAsync(client, token, record, cancellationToken).ConfigureAwait(false);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        // A derived token may not equal the real cask token (vendor prefix like "google-gemini", or a
+        // "-app" suffix like "github-copilot-app"). Fuzzy-match the derived tokens against the local
+        // cask-name list and verify each candidate by artifact, so an unrelated cask is still rejected.
+        foreach (var token in FuzzyCaskCandidates(direct, CaskTokenNames.Value, MaxFuzzyCaskCandidates))
+        {
+            var match = await TryResolveCaskAsync(client, token, record, cancellationToken).ConfigureAwait(false);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Fetches a single cask by <paramref name="token"/> and returns its version only when the
+    /// cask's artifacts resolve to <paramref name="record"/> (path / bundle id). Returns <c>null</c>
+    /// on any failure (network, 404, parse error) or when the cask installs a different bundle, so a
+    /// wrong-token collision is never misreported as this app's update.
+    /// </summary>
+    private async Task<(string LatestVersion, string? Description)?> TryResolveCaskAsync(
+        HttpClient client,
+        string token,
+        AppRecord record,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            using var client = httpClientFactory.CreateClient("homebrew-api");
             using var response = await client.GetAsync($"/api/cask/{token}.json", cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -1220,6 +1272,39 @@ public sealed partial class MacApplicationsScanner(
     }
 
     /// <summary>
+    /// Yields Homebrew cask token candidates for an app, most reliable first. The bundle folder
+    /// name (e.g. <c>"Visual Studio Code.app"</c>) tracks the cask's own <c>app</c> artifact far more
+    /// reliably than the display name, which is often a short marketing name (<c>"Code"</c>) or a
+    /// vendor-prefixed one (<c>"JetBrains Rider"</c>); it is tried first, then the display name as a
+    /// fallback. Only distinct, non-empty tokens are returned. Every candidate is still verified
+    /// against the app's path / bundle id by the caller, so an unrelated cask under the same token is
+    /// rejected rather than trusted.
+    /// </summary>
+    internal static IEnumerable<string> CaskTokenCandidates(string? displayName, string? bundlePath)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        if (bundlePath is { Length: > 0 })
+        {
+            var folder = Path.GetFileNameWithoutExtension(bundlePath.TrimEnd('/'));
+            var token = CreateToken(folder);
+            if (token.Length > 0 && seen.Add(token))
+            {
+                yield return token;
+            }
+        }
+
+        if (displayName is { Length: > 0 })
+        {
+            var token = CreateToken(displayName);
+            if (token.Length > 0 && seen.Add(token))
+            {
+                yield return token;
+            }
+        }
+    }
+
+    /// <summary>
     /// Derives a Homebrew cask token from an app's display name by lowercasing and replacing
     /// spaces/underscores with hyphens (e.g. <c>"Visual Studio Code"</c> \u2192 <c>"visual-studio-code"</c>).
     /// </summary>
@@ -1238,5 +1323,177 @@ public sealed partial class MacApplicationsScanner(
                 };
             }
         }).TrimEnd('-');
+    }
+
+    /// <summary>
+    /// Ranks Homebrew cask tokens from <paramref name="allTokens"/> that contain one of
+    /// <paramref name="baseTokens"/> as a whole hyphen-segment run, closest first (fewest extra
+    /// segments, then suffix before prefix before middle, then shorter). Tokens equal to a base are
+    /// excluded (already tried directly). Returns at most <paramref name="max"/> candidates; every
+    /// one is still verified against the app by the caller, so the fuzziness never resolves an
+    /// unrelated cask on its own.
+    /// </summary>
+    internal static string[] FuzzyCaskCandidates(
+        IReadOnlyList<string> baseTokens,
+        IReadOnlyList<string> allTokens,
+        int max)
+    {
+        if (allTokens.Count == 0 || max <= 0)
+        {
+            return [];
+        }
+
+        var bases = baseTokens
+            .Where(b => b.Length > 0)
+            .Select(b => b.Split('-'))
+            .ToArray();
+
+        if (bases.Length == 0)
+        {
+            return [];
+        }
+
+        var ranked = new List<(int Extra, int Pos, int Len, string Token)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var token in allTokens)
+        {
+            var segments = token.Split('-');
+            foreach (var b in bases)
+            {
+                var index = ContiguousSegmentIndex(segments, b);
+                if (index < 0)
+                {
+                    continue;
+                }
+
+                if (segments.Length == b.Length)
+                {
+                    break; // exact token — already tried directly
+                }
+
+                if (ExtraSegmentsAreAllChannelMarkers(segments, index, b.Length))
+                {
+                    continue; // e.g. "foo-beta" / "-insiders": a pre-release channel that may share the
+                              // stable app's bundle id and would be misreported as its update
+                }
+
+                if (!seen.Add(token))
+                {
+                    break; // already matched via an earlier base
+                }
+
+                var position = index + b.Length == segments.Length ? 0 : index == 0 ? 1 : 2; // suffix, prefix, middle
+                ranked.Add((segments.Length - b.Length, position, token.Length, token));
+                break;
+            }
+        }
+
+        ranked.Sort(static (x, y) =>
+        {
+            var c = x.Extra.CompareTo(y.Extra);
+            if (c != 0)
+            {
+                return c;
+            }
+
+            c = x.Pos.CompareTo(y.Pos);
+            if (c != 0)
+            {
+                return c;
+            }
+
+            c = x.Len.CompareTo(y.Len);
+            return c != 0 ? c : string.CompareOrdinal(x.Token, y.Token);
+        });
+
+        var count = Math.Min(max, ranked.Count);
+        var result = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            result[i] = ranked[i].Token;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Returns the first index at which <paramref name="needle"/> appears as a contiguous run of
+    /// segments in <paramref name="haystack"/>, or <c>-1</c> when it does not.
+    /// </summary>
+    private static int ContiguousSegmentIndex(string[] haystack, string[] needle)
+    {
+        if (needle.Length == 0 || needle.Length > haystack.Length)
+        {
+            return -1;
+        }
+
+        for (var i = 0; i + needle.Length <= haystack.Length; i++)
+        {
+            var matched = true;
+            for (var j = 0; j < needle.Length; j++)
+            {
+                if (!string.Equals(haystack[i + j], needle[j], StringComparison.Ordinal))
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// True when every segment of <paramref name="segments"/> outside the matched base run
+    /// (<paramref name="matchIndex"/> for <paramref name="matchLength"/> segments) is a pre-release
+    /// channel marker (beta, nightly, …). Such tokens are a separate channel of the same app and
+    /// often share its bundle id, so they must not be reported as a stable install's update.
+    /// </summary>
+    private static bool ExtraSegmentsAreAllChannelMarkers(string[] segments, int matchIndex, int matchLength)
+    {
+        var extra = 0;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (i >= matchIndex && i < matchIndex + matchLength)
+            {
+                continue;
+            }
+
+            if (!ChannelMarkers.Contains(segments[i]))
+            {
+                return false;
+            }
+
+            extra++;
+        }
+
+        return extra > 0;
+    }
+
+    /// <summary>
+    /// Loads the Homebrew cask token list from the local API cache (<c>cask_names.txt</c>). Returns
+    /// an empty array when Homebrew is not installed or the file cannot be read, disabling the fuzzy
+    /// fallback rather than failing.
+    /// </summary>
+    private static string[] LoadCaskTokenNames()
+    {
+        var path = Path.Join(ResolveBrewApiCacheDir(), "cask_names.txt");
+        try
+        {
+            return File.Exists(path) ? File.ReadAllLines(path) : [];
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return [];
+        }
     }
 }
