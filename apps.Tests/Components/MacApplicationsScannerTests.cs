@@ -112,6 +112,56 @@ public sealed class MacApplicationsScannerTests
     }
 
     [Test]
+    public async Task FuzzyCaskCandidates_VendorPrefix_ReturnsCatalogToken()
+    {
+        // "Gemini" derives "gemini" (a different app's cask); the real Google cask is "google-gemini".
+        string[] names = ["gemini", "google-gemini", "supertuxkart"];
+
+        var candidates = MacApplicationsScanner.FuzzyCaskCandidates(["gemini"], names, 6);
+
+        await Assert.That(candidates.Length).IsEqualTo(1);
+        await Assert.That(candidates[0]).IsEqualTo("google-gemini");
+    }
+
+    [Test]
+    public async Task FuzzyCaskCandidates_SuffixVariants_RankClosestFirst()
+    {
+        string[] names = ["github", "github-copilot-app", "github-copilot-for-xcode"];
+
+        var candidates = MacApplicationsScanner.FuzzyCaskCandidates(["github-copilot"], names, 6);
+
+        await Assert.That(candidates.Length).IsEqualTo(2);
+        await Assert.That(candidates[0]).IsEqualTo("github-copilot-app");
+        await Assert.That(candidates[1]).IsEqualTo("github-copilot-for-xcode");
+    }
+
+    [Test]
+    public async Task FuzzyCaskCandidates_SkipsPreReleaseChannelVariants()
+    {
+        // A "-beta" / "-insiders" cask is a separate channel that may share the stable bundle id;
+        // fuzzy must not surface it, or a stable install would be reported outdated against the beta.
+        string[] names = ["foo", "foo-beta", "visual-studio-code", "visual-studio-code-insiders"];
+
+        var foo = MacApplicationsScanner.FuzzyCaskCandidates(["foo"], names, 6);
+        var vsc = MacApplicationsScanner.FuzzyCaskCandidates(["visual-studio-code"], names, 6);
+
+        await Assert.That(foo.Length).IsEqualTo(0);
+        await Assert.That(vsc.Contains("visual-studio-code-insiders")).IsFalse();
+    }
+
+    [Test]
+    public async Task FuzzyCaskCandidates_ExcludesExactAndNonSegmentMatches_RespectsCap()
+    {
+        string[] names = ["slack", "slackcat", "slack-cli", "slack-beta"];
+
+        var candidates = MacApplicationsScanner.FuzzyCaskCandidates(["slack"], names, 1);
+
+        await Assert.That(candidates.Length).IsEqualTo(1);
+        await Assert.That(candidates.Contains("slack")).IsFalse();    // exact token already tried directly
+        await Assert.That(candidates.Contains("slackcat")).IsFalse(); // "slack" is not a whole segment of "slackcat"
+    }
+
+    [Test]
     public async Task Normalize_TrimsAndStripsLeftToRightMark()
     {
         await Assert.That(MacApplicationsScanner.Normalize("  Pages‎  ")).IsEqualTo("Pages");
@@ -372,6 +422,41 @@ public sealed class MacApplicationsScannerTests
 
         await Assert.That(results[0].Error).IsFalse();
         await Assert.That(record.App.LatestVersion).IsNull();
+    }
+
+    [Test]
+    public async Task CheckAsync_HomebrewCask_FuzzyResolvesVendorPrefixedToken()
+    {
+        // Derived token "gemini" fetches an unrelated cask (MacPaw's Gemini 2) that fails verification;
+        // fuzzy matching against the cask-name list finds "google-gemini", confirmed by the bundle path.
+        const string wrongCask = """
+                                {
+                                  "token": "gemini",
+                                  "name": [ "Gemini" ],
+                                  "desc": "Duplicate file finder",
+                                  "version": "2.10.1",
+                                  "artifacts": [ { "app": [ "Gemini 2.app" ], "target": "/Applications/Gemini 2.app" } ]
+                                }
+                                """;
+        const string googleCask = """
+                                {
+                                  "token": "google-gemini",
+                                  "name": [ "Google Gemini" ],
+                                  "desc": "Google Gemini desktop",
+                                  "version": "1.111.1.839",
+                                  "artifacts": [ { "app": [ "Gemini.app" ], "target": "/Applications/Gemini.app" } ]
+                                }
+                                """;
+        var handler = new StubHttpMessageHandler()
+            .WithJson("/api/cask/gemini.json", wrongCask)
+            .WithJson("/api/cask/google-gemini.json", googleCask);
+        var scanner = CreateScanner(handler, caskTokenNames: ["gemini", "google-gemini", "supertuxkart"]);
+        var record = CaskRecord(scanner, "Gemini", path: "/Applications/Gemini.app", installed: "1.0.0");
+
+        var results = await Check(scanner, record);
+
+        await Assert.That(results[0].Error).IsFalse();
+        await Assert.That(record.App.LatestVersion).IsEqualTo("1.111.1.839");
     }
 
     [Test]
@@ -725,12 +810,22 @@ public sealed class MacApplicationsScannerTests
         return dir;
     }
 
-    private static MacApplicationsScanner CreateScanner(StubHttpMessageHandler handler, IProcessRunner? runner = null) =>
-        new(
+    private static MacApplicationsScanner CreateScanner(
+        StubHttpMessageHandler handler,
+        IProcessRunner? runner = null,
+        string[]? caskTokenNames = null)
+    {
+        // Inject the cask-name list (empty by default) so tests never read the machine's real
+        // Homebrew cache and the fuzzy fallback stays deterministic.
+        return new MacApplicationsScanner(
             new PlistReader(NullLogger<PlistReader>.Instance),
             runner ?? new FakeProcessRunner(),
             new StubHttpClientFactory(handler),
-            NullLogger<MacApplicationsScanner>.Instance);
+            NullLogger<MacApplicationsScanner>.Instance)
+        {
+            CaskTokenNames = new Lazy<string[]>(() => caskTokenNames ?? []),
+        };
+    }
 
     private static AppRecord AppStoreRecord(
         MacApplicationsScanner scanner,
