@@ -1,5 +1,7 @@
 bin/
 obj/
+/publish/
+/dist/
 /packages/
 /coverage/
 riderModule.iml
