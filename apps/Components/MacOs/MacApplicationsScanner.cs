@@ -962,15 +962,39 @@ public sealed partial class MacApplicationsScanner(
     private static partial Regex VersionNumberRegex();
 
     /// <summary>
-    /// Queries <c>https://formulae.brew.sh/api/cask/{token}.json</c> for the latest version.
-    /// Returns <c>null</c> on any failure (network, 404, parse error).
+    /// Resolves the latest version from <c>https://formulae.brew.sh/api/cask/{token}.json</c> by
+    /// trying each candidate token (see <see cref="CaskTokenCandidates"/>) and returning the first
+    /// cask whose artifacts resolve to this app. Returns <c>null</c> when no candidate matches.
     /// </summary>
     private async Task<(string LatestVersion, string? Description)?> GetLatestVersionByCaskAsync(AppRecord record, CancellationToken cancellationToken)
     {
-        var token = CreateToken(record.App.Name);
+        using var client = httpClientFactory.CreateClient("homebrew-api");
+        foreach (var token in CaskTokenCandidates(record.App.Name, record.App.Path))
+        {
+            var match = await TryResolveCaskAsync(client, token, record, cancellationToken).ConfigureAwait(false);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Fetches a single cask by <paramref name="token"/> and returns its version only when the
+    /// cask's artifacts resolve to <paramref name="record"/> (path / bundle id). Returns <c>null</c>
+    /// on any failure (network, 404, parse error) or when the cask installs a different bundle, so a
+    /// wrong-token collision is never misreported as this app's update.
+    /// </summary>
+    private async Task<(string LatestVersion, string? Description)?> TryResolveCaskAsync(
+        HttpClient client,
+        string token,
+        AppRecord record,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            using var client = httpClientFactory.CreateClient("homebrew-api");
             using var response = await client.GetAsync($"/api/cask/{token}.json", cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -1217,6 +1241,39 @@ public sealed partial class MacApplicationsScanner(
         return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var hours) && hours >= 0
             ? TimeSpan.FromHours(hours)
             : DefaultBrewCacheMaxAge;
+    }
+
+    /// <summary>
+    /// Yields Homebrew cask token candidates for an app, most reliable first. The bundle folder
+    /// name (e.g. <c>"Visual Studio Code.app"</c>) tracks the cask's own <c>app</c> artifact far more
+    /// reliably than the display name, which is often a short marketing name (<c>"Code"</c>) or a
+    /// vendor-prefixed one (<c>"JetBrains Rider"</c>); it is tried first, then the display name as a
+    /// fallback. Only distinct, non-empty tokens are returned. Every candidate is still verified
+    /// against the app's path / bundle id by the caller, so an unrelated cask under the same token is
+    /// rejected rather than trusted.
+    /// </summary>
+    internal static IEnumerable<string> CaskTokenCandidates(string? displayName, string? bundlePath)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        if (bundlePath is { Length: > 0 })
+        {
+            var folder = Path.GetFileNameWithoutExtension(bundlePath.TrimEnd('/'));
+            var token = CreateToken(folder);
+            if (token.Length > 0 && seen.Add(token))
+            {
+                yield return token;
+            }
+        }
+
+        if (displayName is { Length: > 0 })
+        {
+            var token = CreateToken(displayName);
+            if (token.Length > 0 && seen.Add(token))
+            {
+                yield return token;
+            }
+        }
     }
 
     /// <summary>

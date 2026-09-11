@@ -82,6 +82,36 @@ public sealed class MacApplicationsScannerTests
     }
 
     [Test]
+    public async Task CaskTokenCandidates_PrefersBundleFolderNameOverDisplayName()
+    {
+        // VS Code's display name "Code" derives the wrong token; the bundle folder "Visual Studio
+        // Code" resolves the real cask, so it must be tried first.
+        var candidates = MacApplicationsScanner.CaskTokenCandidates("Code", "/Applications/Visual Studio Code.app").ToArray();
+
+        await Assert.That(candidates.Length).IsEqualTo(2);
+        await Assert.That(candidates[0]).IsEqualTo("visual-studio-code");
+        await Assert.That(candidates[1]).IsEqualTo("code");
+    }
+
+    [Test]
+    public async Task CaskTokenCandidates_NamesAgree_YieldsSingleDistinctToken()
+    {
+        var candidates = MacApplicationsScanner.CaskTokenCandidates("Rider", "/Applications/Rider.app").ToArray();
+
+        await Assert.That(candidates.Length).IsEqualTo(1);
+        await Assert.That(candidates[0]).IsEqualTo("rider");
+    }
+
+    [Test]
+    public async Task CaskTokenCandidates_NoPath_UsesDisplayNameOnly()
+    {
+        var candidates = MacApplicationsScanner.CaskTokenCandidates("Slack", null).ToArray();
+
+        await Assert.That(candidates.Length).IsEqualTo(1);
+        await Assert.That(candidates[0]).IsEqualTo("slack");
+    }
+
+    [Test]
     public async Task Normalize_TrimsAndStripsLeftToRightMark()
     {
         await Assert.That(MacApplicationsScanner.Normalize("  Pages‎  ")).IsEqualTo("Pages");
@@ -291,6 +321,55 @@ public sealed class MacApplicationsScannerTests
         var results = await Check(scanner, record);
 
         await Assert.That(results.Count).IsEqualTo(1);
+        await Assert.That(results[0].Error).IsFalse();
+        await Assert.That(record.App.LatestVersion).IsNull();
+    }
+
+    [Test]
+    public async Task CheckAsync_HomebrewCask_BundleTokenMisses_FallsBackToDisplayNameToken()
+    {
+        const string caskJson = """
+                               {
+                                 "token": "chatgpt",
+                                 "name": [ "ChatGPT" ],
+                                 "desc": "OpenAI app",
+                                 "version": "1.5.0",
+                                 "artifacts": [ { "app": [ "ChatGPT.app" ], "target": "/Applications/ChatGPT Beta.app" } ]
+                               }
+                               """;
+        // Bundle folder "ChatGPT Beta" → chatgpt-beta (missing); display name "ChatGPT" → chatgpt (hits).
+        var handler = new StubHttpMessageHandler()
+            .WithStatus("/api/cask/chatgpt-beta.json", HttpStatusCode.NotFound)
+            .WithJson("/api/cask/chatgpt.json", caskJson);
+        var scanner = CreateScanner(handler);
+        var record = CaskRecord(scanner, "ChatGPT", path: "/Applications/ChatGPT Beta.app", installed: "1.4.0");
+
+        var results = await Check(scanner, record);
+
+        await Assert.That(results[0].Error).IsFalse();
+        await Assert.That(record.App.LatestVersion).IsEqualTo("1.5.0");
+    }
+
+    [Test]
+    public async Task CheckAsync_HomebrewCask_TokenResolvesToUnrelatedApp_StaysUnresolved()
+    {
+        // The "gemini" cask is a different app (MacPaw's "Gemini 2"); its artifacts do not resolve
+        // to our Google Gemini bundle, so the version must be rejected rather than misreported.
+        const string caskJson = """
+                               {
+                                 "token": "gemini",
+                                 "name": [ "Gemini" ],
+                                 "desc": "Duplicate file finder",
+                                 "version": "2.10.1",
+                                 "artifacts": [ { "app": [ "Gemini 2.app" ], "target": "/Applications/Gemini 2.app" } ]
+                               }
+                               """;
+        var handler = new StubHttpMessageHandler().WithJson("/api/cask/gemini.json", caskJson);
+        var scanner = CreateScanner(handler);
+        var record = CaskRecord(scanner, "Gemini", path: "/Applications/Gemini.app", installed: "1.0.0");
+
+        var results = await Check(scanner, record);
+
         await Assert.That(results[0].Error).IsFalse();
         await Assert.That(record.App.LatestVersion).IsNull();
     }
