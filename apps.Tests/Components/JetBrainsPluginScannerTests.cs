@@ -283,6 +283,35 @@ public sealed class JetBrainsPluginScannerTests
         await Assert.That(handler.Requests).IsEmpty();
     }
 
+    [Test]
+    public async Task KeepInstalledProductDirs_DropsDirsWithNoInstalledIde()
+    {
+        var root = Path.Join("Users", "me", "Library", "Application Support", "JetBrains");
+        string[] productDirs =
+        [
+            Path.Join(root, "Rider"),
+            Path.Join(root, "Rider2026.2"),
+            Path.Join(root, "Rider2026.3"),
+            Path.Join(root, "Toolbox")
+        ];
+        var builds = new Dictionary<string, string> { ["Rider2026.3"] = "RD-263.7307.258" };
+
+        var kept = JetBrainsPluginScanner.KeepInstalledProductDirs(productDirs, builds);
+
+        await Assert.That(kept).IsEquivalentTo([Path.Join(root, "Rider2026.3")]);
+    }
+
+    [Test]
+    public async Task KeepInstalledProductDirs_NoInstalledIdeFound_KeepsAllDirs()
+    {
+        var root = Path.Join("Users", "me", "Library", "Application Support", "JetBrains");
+        string[] productDirs = [Path.Join(root, "Rider2026.2"), Path.Join(root, "Rider2026.3")];
+
+        var kept = JetBrainsPluginScanner.KeepInstalledProductDirs(productDirs, new Dictionary<string, string>());
+
+        await Assert.That(kept).IsEquivalentTo(productDirs);
+    }
+
     private static JetBrainsPluginScanner CreateScanner(StubHttpMessageHandler handler) =>
         new(new StubHttpClientFactory(handler), NullLogger<JetBrainsPluginScanner>.Instance);
 
