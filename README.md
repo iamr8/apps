@@ -80,7 +80,7 @@ apps --version | -v     # show the current version of apps
 
 ### Build from Source
 
-- .NET 10 SDK (for building from source)
+- .NET 11 SDK (for building from source)
 
 ```bash
 git clone https://github.com/iamr8/apps.git
