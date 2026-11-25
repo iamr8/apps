@@ -311,4 +311,27 @@ public sealed class VsCodeExtScannerTests
     }
 
     private const string GalleryPath = "/_apis/public/gallery/extensionquery";
+
+    // Breaks if the parser misses an ID in the value VS Code stores for disabled extensions.
+    [Test]
+    public async Task ParseDisabledExtensionIds_ReadsIdsFromStoredValue()
+    {
+        const string json = """[{"id":"mgmcdermott.vscode-language-babel","uuid":"dd5a2c83-ad8c-4839-a529-0644e5acb646"},{"id":"ms-python.python"}]""";
+
+        var ids = VsCodeExtScanner.ParseDisabledExtensionIds(json);
+
+        await Assert.That(ids.Count).IsEqualTo(2);
+        await Assert.That(ids.Contains("mgmcdermott.vscode-language-babel")).IsTrue();
+        await Assert.That(ids.Contains("ms-python.python")).IsTrue();
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("not json")]
+    public async Task ParseDisabledExtensionIds_EmptyOrInvalidValue_ReturnsEmpty(string json)
+    {
+        var ids = VsCodeExtScanner.ParseDisabledExtensionIds(json);
+
+        await Assert.That(ids.Count).IsEqualTo(0);
+    }
 }

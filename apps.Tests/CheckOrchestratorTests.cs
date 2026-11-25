@@ -78,6 +78,32 @@ public sealed class CheckOrchestratorTests
         await Assert.That(errors).IsEqualTo(0);
     }
 
+    // Breaks if the orchestrator passes disabled records to the scanner's CheckAsync.
+    [Test]
+    public async Task CheckAsync_DisabledRecords_AreNotChecked()
+    {
+        var scanner = new FakeScanner
+        {
+            Name = "S",
+            Kind = AppKind.App,
+            OnCheck = record =>
+            {
+                record.App.LatestVersion = "2.0.0";
+                return (record, false);
+            },
+        };
+        var disabled = Record(scanner, "off", "1.0.0");
+        disabled.App.IsDisabled = true;
+
+        var (total, updates, errors) = await BuildOrchestrator(scanner).CheckAsync([disabled]);
+
+        await Assert.That(total).IsEqualTo(0);
+        await Assert.That(updates).IsEqualTo(0);
+        await Assert.That(errors).IsEqualTo(0);
+        await Assert.That(disabled.App.LatestVersion).IsNull();
+        await Assert.That(disabled.CheckFailed).IsFalse();
+    }
+
     [Test]
     public async Task CheckAsync_OnlyChecksRecordsMatchingScannerKind()
     {
