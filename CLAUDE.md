@@ -1,6 +1,6 @@
 ## Project Context
 
-`apps` is a macOS CLI tool (binary: **`apps`**) written in **.NET 10 (C#)** that discovers
+`apps` is a macOS CLI tool (binary: **`apps`**) written in **.NET 11 (C#)** that discovers
 every installed application, SDK, runtime, developer tool, and library on a Mac and checks each one
 for available updates. All state is in-memory only — every run re-scans and re-checks from scratch.
 
@@ -8,7 +8,7 @@ for available updates. All state is in-memory only — every run re-scans and re
 
 | Layer              | Choice                                       |
 |--------------------|----------------------------------------------|
-| Language / Runtime | C# · .NET 10 (AOT-ready)                     |
+| Language / Runtime | C# · .NET 11 (AOT-ready)                     |
 | CLI framework      | `System.CommandLine`                         |
 | HTTP               | `System.Net.Http.HttpClient` (typed clients) |
 | JSON               | `System.Text.Json`                           |
@@ -81,7 +81,7 @@ dotnet test --project apps.Tests/apps.Tests.csproj   # run only the test project
 Key setup details:
 
 - **MTP opt-in** — `global.json` at the repo root sets `test.runner = "Microsoft.Testing.Platform"`.
-  This is required for `dotnet test` to drive TUnit on the .NET 10 SDK; without it `dotnet test`
+  This is required for `dotnet test` to drive TUnit on the .NET 11 SDK; without it `dotnet test`
   fails with the legacy VSTest error.
 - **Project reference** — the main project's `SelfContained` is gated on a `RuntimeIdentifier`
   being present (`Condition="'$(RuntimeIdentifier)' != ''"`), so a plain `dotnet build` (and the

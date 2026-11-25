@@ -69,10 +69,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup .NET 10
+      - name: Setup .NET 11
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
 
       - name: Restore dependencies
         run: dotnet restore
@@ -94,10 +94,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup .NET 10
+      - name: Setup .NET 11
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
 
       # AOT publish with -r is inherently self-contained, and the csproj reads the version from the
       # VERSION file at build time, so neither --self-contained nor -p:Version is needed. Tests and
