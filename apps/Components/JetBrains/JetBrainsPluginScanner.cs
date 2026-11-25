@@ -517,23 +517,16 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
     /// <returns>The disabled plugin IDs, or an empty set when the file does not exist.</returns>
     internal static HashSet<string> ReadDisabledPluginIds(string productDir)
     {
-        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var path = Path.Combine(productDir, "disabled_plugins.txt");
+        var path = Path.Join(productDir, "disabled_plugins.txt");
         if (!File.Exists(path))
         {
-            return ids;
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
 
-        foreach (var line in File.ReadLines(path))
-        {
-            var id = line.Trim();
-            if (id.Length > 0)
-            {
-                ids.Add(id);
-            }
-        }
-
-        return ids;
+        return File.ReadLines(path)
+            .Select(line => line.Trim())
+            .Where(id => id.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static OS GetCurrentOperatingSystem()

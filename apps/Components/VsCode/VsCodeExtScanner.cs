@@ -33,7 +33,7 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
 
     private static readonly string ExtensionsRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vscode", "extensions");
 
-    private static readonly string StateDbPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "Code", "User", "globalStorage", "state.vscdb");
+    private static readonly string StateDbPath = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "Code", "User", "globalStorage", "state.vscdb");
 
     /// <inheritdoc/>
     public bool IsAvailable()
@@ -353,29 +353,23 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
     /// <returns>The disabled extension IDs.</returns>
     internal static HashSet<string> ParseDisabledExtensionIds(string json)
     {
-        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(json))
         {
-            return ids;
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
 
         try
         {
             var entries = JsonSerializer.Deserialize(json, VsCodeJsonContext.Default.VsCodeDisabledExtensionArray);
-            foreach (var entry in entries ?? [])
-            {
-                if (!string.IsNullOrWhiteSpace(entry.Id))
-                {
-                    ids.Add(entry.Id);
-                }
-            }
+            return (entries ?? [])
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.Id))
+                .Select(entry => entry.Id!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
         catch (JsonException)
         {
-            ids.Clear();
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
-
-        return ids;
     }
 
     /// <summary>
