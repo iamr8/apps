@@ -20,7 +20,7 @@ public static class UpdateCommand
 
     private static readonly Option<string?> OPTION_kind = new("--kind", "-k")
     {
-        Description = "Scope to one app kind: app | package | lib | dep | service | ext",
+        Description = "Scope to one app kind: app | package | dev | service | ext",
     };
 
     private static readonly Option<bool> OPTION_dryRun = new("--dry-run", "-d")
@@ -56,17 +56,7 @@ public static class UpdateCommand
     /// <summary>Configures the root command with update options and action.</summary>
     public static void Configure(RootCommand rootCmd, Orchestrator orchestrator, IServiceProvider serviceProvider)
     {
-        OPTION_kind.AcceptOnlyFromAmong("app", "package", "lib", "dep", "service", "ext");
-        OPTION_kind.Validators.Add(result =>
-        {
-            var value = result.GetValueOrDefault<string?>();
-            if (value is null || AppKindExtensions.TryParseCliString(value, out _))
-            {
-                return;
-            }
-
-            result.AddError($"Invalid value '{value}' for --kind. Valid options: {string.Join(" | ", Enum.GetValues<AppKind>().Select(c => c.ToCliString()))}");
-        });
+        OPTION_kind.AcceptOnlyFromAmong("app", "package", "dev", "service", "ext");
 
         rootCmd.Options.Add(OPTION_all);
         rootCmd.Options.Add(OPTION_kind);
