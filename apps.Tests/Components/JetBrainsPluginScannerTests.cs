@@ -283,6 +283,72 @@ public sealed class JetBrainsPluginScannerTests
         await Assert.That(handler.Requests).IsEmpty();
     }
 
+    // Breaks if the reader skips the IDE's disabled_plugins.txt or keeps blank lines and padding.
+    [Test]
+    public async Task ReadDisabledPluginIds_ReadsOneIdPerLine()
+    {
+        var productDir = Directory.CreateTempSubdirectory("apps-jb-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(productDir, "disabled_plugins.txt"), "AngularJS\n  com.intellij.ml.llm  \n\ntslint\n");
+
+            var ids = JetBrainsPluginScanner.ReadDisabledPluginIds(productDir);
+
+            await Assert.That(ids.Count).IsEqualTo(3);
+            await Assert.That(ids.Contains("com.intellij.ml.llm")).IsTrue();
+            await Assert.That(ids.Contains("")).IsFalse();
+        }
+        finally
+        {
+            Directory.Delete(productDir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task ReadDisabledPluginIds_NoFile_ReturnsEmpty()
+    {
+        var productDir = Directory.CreateTempSubdirectory("apps-jb-").FullName;
+        try
+        {
+            var ids = JetBrainsPluginScanner.ReadDisabledPluginIds(productDir);
+
+            await Assert.That(ids.Count).IsEqualTo(0);
+        }
+        finally
+        {
+            Directory.Delete(productDir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task KeepInstalledProductDirs_DropsDirsWithNoInstalledIde()
+    {
+        var root = Path.Join("Users", "me", "Library", "Application Support", "JetBrains");
+        string[] productDirs =
+        [
+            Path.Join(root, "Rider"),
+            Path.Join(root, "Rider2026.2"),
+            Path.Join(root, "Rider2026.3"),
+            Path.Join(root, "Toolbox")
+        ];
+        var builds = new Dictionary<string, string> { ["Rider2026.3"] = "RD-263.7307.258" };
+
+        var kept = JetBrainsPluginScanner.KeepInstalledProductDirs(productDirs, builds);
+
+        await Assert.That(kept).IsEquivalentTo([Path.Join(root, "Rider2026.3")]);
+    }
+
+    [Test]
+    public async Task KeepInstalledProductDirs_NoInstalledIdeFound_KeepsAllDirs()
+    {
+        var root = Path.Join("Users", "me", "Library", "Application Support", "JetBrains");
+        string[] productDirs = [Path.Join(root, "Rider2026.2"), Path.Join(root, "Rider2026.3")];
+
+        var kept = JetBrainsPluginScanner.KeepInstalledProductDirs(productDirs, new Dictionary<string, string>());
+
+        await Assert.That(kept).IsEquivalentTo(productDirs);
+    }
+
     private static JetBrainsPluginScanner CreateScanner(StubHttpMessageHandler handler) =>
         new(new StubHttpClientFactory(handler), NullLogger<JetBrainsPluginScanner>.Instance);
 

@@ -4,7 +4,7 @@ namespace apps;
 
 /// <summary>
 /// Discriminator for every discovered entry.
-/// CLI-facing string values (used with --kind): app | sysapp | package | lib | dep | service | ext
+/// CLI-facing string values (used with --kind): app | package | dev | service | ext
 /// </summary>
 [Flags]
 public enum AppKind : byte
@@ -71,8 +71,8 @@ public static class AppKindExtensions
             "dev" => AppKind.DevTool,
             "service" => AppKind.Service,
             "ext" => AppKind.Extension,
-            _ => AppKind.None
+            _ => null
         };
-        return (int)kind >= 0;
+        return kind is not null;
     }
 }

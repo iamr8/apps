@@ -81,6 +81,12 @@ public sealed record DiscoveredApp
 
     public bool IsDuplicate { get; init; }
 
+    /// <summary>
+    /// True when the user disabled this item in its host app, such as an IDE plugin.
+    /// Disabled items are listed but not checked for updates.
+    /// </summary>
+    public bool IsDisabled { get; set; }
+
     public List<DiscoveredApp>? SubApps { get; set; }
 
     public OsvEcosystemName? OsvEcosystem { get; set; }

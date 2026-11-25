@@ -56,6 +56,15 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
         try
         {
             _executablePaths = Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly);
+
+            // An IDE upgrade leaves the old config dir behind. Its plugins belong to no installed IDE.
+            // Windows is skipped: its root holds install dirs, which never match a data dir name.
+            if (OperatingSystem.IsMacOS())
+            {
+                _builds = JetBrainsBuildResolver.ResolveBuilds();
+                _executablePaths = KeepInstalledProductDirs(_executablePaths, _builds);
+            }
+
             return _executablePaths.Length > 0;
         }
         catch (Exception ex)
@@ -83,9 +92,11 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
             }
 
             string[] pluginDirs;
+            HashSet<string> disabledIds;
             try
             {
                 pluginDirs = Directory.GetDirectories(pluginsDir, "*", SearchOption.TopDirectoryOnly);
+                disabledIds = ReadDisabledPluginIds(productDir);
             }
             catch
             {
@@ -112,6 +123,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
                 }
 
                 app.OwnerId = Path.GetFileName(productDir);
+                app.IsDisabled = app.UpdateInfo is { } id && disabledIds.Contains(id);
                 yield return app;
             }
         }
@@ -479,6 +491,43 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
                 _ => "OTHER"
             }
         };
+
+    /// <summary>
+    /// Keeps only the product directories whose name matches the data directory of an installed IDE.
+    /// </summary>
+    /// <param name="productDirs">The product config directories.</param>
+    /// <param name="builds">Installed IDE builds keyed by data directory name.</param>
+    /// <returns>
+    /// The directories that belong to an installed IDE, or all <paramref name="productDirs"/> when none match.
+    /// </returns>
+    /// <remarks>
+    /// The fallback covers an IDE installed where its <c>product-info.json</c> is not found.
+    /// Its plugins still show, but without the stale-directory filter.
+    /// </remarks>
+    internal static string[] KeepInstalledProductDirs(string[] productDirs, IReadOnlyDictionary<string, string> builds)
+    {
+        var installed = productDirs.Where(dir => builds.ContainsKey(Path.GetFileName(dir))).ToArray();
+        return installed.Length > 0 ? installed : productDirs;
+    }
+
+    /// <summary>
+    /// Reads the IDs of the plugins the user disabled in the IDE from <c>disabled_plugins.txt</c>.
+    /// </summary>
+    /// <param name="productDir">The IDE config directory.</param>
+    /// <returns>The disabled plugin IDs, or an empty set when the file does not exist.</returns>
+    internal static HashSet<string> ReadDisabledPluginIds(string productDir)
+    {
+        var path = Path.Join(productDir, "disabled_plugins.txt");
+        if (!File.Exists(path))
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return File.ReadLines(path)
+            .Select(line => line.Trim())
+            .Where(id => id.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
 
     private static OS GetCurrentOperatingSystem()
     {
