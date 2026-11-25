@@ -27,7 +27,7 @@ public sealed class CheckOrchestrator(IEnumerable<IScanner> scanners, LiveProgre
         var appGroups = new List<(IScanner Scanner, AppRecord[] Apps)>();
         foreach (var scanner in scanners)
         {
-            var scannerApps = apps.Where(c => c.App.Source.Name == scanner.Name);
+            var scannerApps = apps.Where(c => c.App.Source.Name == scanner.Name && !c.App.IsDisabled);
             var allApps = scannerApps
                 .Concat(scannerApps.Where(c => c.SubApps?.Any() == true).SelectMany(c => c.SubApps!))
                 .ToDictionary(c => c);

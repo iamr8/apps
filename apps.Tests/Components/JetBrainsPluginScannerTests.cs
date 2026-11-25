@@ -283,6 +283,43 @@ public sealed class JetBrainsPluginScannerTests
         await Assert.That(handler.Requests).IsEmpty();
     }
 
+    // Breaks if the reader skips the IDE's disabled_plugins.txt or keeps blank lines and padding.
+    [Test]
+    public async Task ReadDisabledPluginIds_ReadsOneIdPerLine()
+    {
+        var productDir = Directory.CreateTempSubdirectory("apps-jb-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(productDir, "disabled_plugins.txt"), "AngularJS\n  com.intellij.ml.llm  \n\ntslint\n");
+
+            var ids = JetBrainsPluginScanner.ReadDisabledPluginIds(productDir);
+
+            await Assert.That(ids.Count).IsEqualTo(3);
+            await Assert.That(ids.Contains("com.intellij.ml.llm")).IsTrue();
+            await Assert.That(ids.Contains("")).IsFalse();
+        }
+        finally
+        {
+            Directory.Delete(productDir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task ReadDisabledPluginIds_NoFile_ReturnsEmpty()
+    {
+        var productDir = Directory.CreateTempSubdirectory("apps-jb-").FullName;
+        try
+        {
+            var ids = JetBrainsPluginScanner.ReadDisabledPluginIds(productDir);
+
+            await Assert.That(ids.Count).IsEqualTo(0);
+        }
+        finally
+        {
+            Directory.Delete(productDir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task KeepInstalledProductDirs_DropsDirsWithNoInstalledIde()
     {

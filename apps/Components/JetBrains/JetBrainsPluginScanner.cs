@@ -92,9 +92,11 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
             }
 
             string[] pluginDirs;
+            HashSet<string> disabledIds;
             try
             {
                 pluginDirs = Directory.GetDirectories(pluginsDir, "*", SearchOption.TopDirectoryOnly);
+                disabledIds = ReadDisabledPluginIds(productDir);
             }
             catch
             {
@@ -121,6 +123,7 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
                 }
 
                 app.OwnerId = Path.GetFileName(productDir);
+                app.IsDisabled = app.UpdateInfo is { } id && disabledIds.Contains(id);
                 yield return app;
             }
         }
@@ -505,6 +508,32 @@ public sealed class JetBrainsPluginScanner(IHttpClientFactory httpClientFactory,
     {
         var installed = productDirs.Where(dir => builds.ContainsKey(Path.GetFileName(dir))).ToArray();
         return installed.Length > 0 ? installed : productDirs;
+    }
+
+    /// <summary>
+    /// Reads the IDs of the plugins the user disabled in the IDE from <c>disabled_plugins.txt</c>.
+    /// </summary>
+    /// <param name="productDir">The IDE config directory.</param>
+    /// <returns>The disabled plugin IDs, or an empty set when the file does not exist.</returns>
+    internal static HashSet<string> ReadDisabledPluginIds(string productDir)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var path = Path.Combine(productDir, "disabled_plugins.txt");
+        if (!File.Exists(path))
+        {
+            return ids;
+        }
+
+        foreach (var line in File.ReadLines(path))
+        {
+            var id = line.Trim();
+            if (id.Length > 0)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
     }
 
     private static OS GetCurrentOperatingSystem()
