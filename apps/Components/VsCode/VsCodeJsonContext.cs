@@ -86,8 +86,15 @@ internal sealed class VsCodeExtProperty
     public string? Value { get; init; }
 }
 
+internal sealed class VsCodeDisabledExtension
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; init; }
+}
+
 [JsonSerializable(typeof(VsCodePackageJson))]
 [JsonSerializable(typeof(VsCodeQueryRequest))]
 [JsonSerializable(typeof(VsCodeQueryResponse))]
+[JsonSerializable(typeof(VsCodeDisabledExtension[]))]
 internal sealed partial class VsCodeJsonContext : JsonSerializerContext;
 

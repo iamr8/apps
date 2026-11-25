@@ -33,6 +33,8 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
 
     private static readonly string ExtensionsRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".vscode", "extensions");
 
+    private static readonly string StateDbPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "Code", "User", "globalStorage", "state.vscdb");
+
     /// <inheritdoc/>
     public bool IsAvailable()
     {
@@ -53,12 +55,14 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
         }
 
         var displayNames = BuildDisplayNameIndex();
+        var disabledIds = await ReadDisabledExtensionIdsAsync(cancellationToken).ConfigureAwait(false);
 
         foreach (var line in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var app = ParseLine(line, displayNames);
             if (app is not null)
             {
+                app.IsDisabled = disabledIds.Contains(app.PackageId!);
                 yield return app;
             }
         }
@@ -137,6 +141,33 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
                 await writer.WriteAsync((record, true)!, cancellationToken).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Reads the IDs of the extensions disabled in the default VS Code profile from its state database.
+    /// </summary>
+    /// <remarks>
+    /// VS Code stores the list in SQLite, so this runs the <c>sqlite3</c> CLI that comes with macOS.
+    /// On other systems, or when the read fails, no extension counts as disabled.
+    /// </remarks>
+    private async Task<HashSet<string>> ReadDisabledExtensionIdsAsync(CancellationToken cancellationToken)
+    {
+        var sqlite = OperatingSystem.IsMacOS() ? ScannerHelper.FindExecutable("sqlite3") : null;
+        if (sqlite is null || !File.Exists(StateDbPath))
+        {
+            return ParseDisabledExtensionIds("");
+        }
+
+        var result = await runner
+            .RunAsync(sqlite, $"-readonly \"{StateDbPath}\" \"SELECT value FROM ItemTable WHERE key = 'extensionsIdentifiers/disabled'\"", cancellationToken)
+            .ConfigureAwait(false);
+        if (!result.Success)
+        {
+            logger.LogDebug("Cannot read disabled VS Code extensions: {Err}", result.StandardError.Trim());
+            return ParseDisabledExtensionIds("");
+        }
+
+        return ParseDisabledExtensionIds(result.StandardOutput);
     }
 
     /// <summary>
@@ -313,6 +344,39 @@ public sealed class VsCodeExtScanner(IProcessRunner runner, IHttpClientFactory h
     /// </summary>
     internal static bool IsNlsPlaceholder(string value)
         => value.Length >= 2 && value[0] == '%' && value[^1] == '%';
+
+    /// <summary>
+    /// Reads the extension IDs from the <c>extensionsIdentifiers/disabled</c> value that VS Code keeps
+    /// in its state database, in the form <c>[{"id":"publisher.name","uuid":"…"}]</c>.
+    /// </summary>
+    /// <param name="json">The stored value, or an empty string when no extension is disabled.</param>
+    /// <returns>The disabled extension IDs.</returns>
+    internal static HashSet<string> ParseDisabledExtensionIds(string json)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return ids;
+        }
+
+        try
+        {
+            var entries = JsonSerializer.Deserialize(json, VsCodeJsonContext.Default.VsCodeDisabledExtensionArray);
+            foreach (var entry in entries ?? [])
+            {
+                if (!string.IsNullOrWhiteSpace(entry.Id))
+                {
+                    ids.Add(entry.Id);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            ids.Clear();
+        }
+
+        return ids;
+    }
 
     /// <summary>
     /// Splits a <c>code --list-extensions --show-versions</c> line of the form
